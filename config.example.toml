@@ -1,7 +1,6 @@
 # Copy to config.toml (gitignored) and adjust.
 
 # Folder the EPUBs are written to; one subfolder per publication.
-# Share this folder with the Boox via Syncthing.
 output_dir = "~/Books/Newsletters"
 
 # Remembers which posts were processed (optional, this is the default).
@@ -16,3 +15,9 @@ url = "https://newsletter.pragmaticengineer.com"
 # [[publications]]
 # url = "https://example.substack.com"
 # backfill = 10   # overrides the default above
+
+# Push new issues to the Boox via BOOX Drop (optional).
+# The address is shown in BOOX Drop on the device; give the Boox a fixed IP in your router.
+# [boox]
+# url = "http://192.168.1.50:8085"
+# folder = "Books/Newsletters"   # library folder on the Boox (default)

@@ -1,4 +1,4 @@
-"""Writes EPUBs into the synced output folder."""
+"""Writes EPUBs into the output folder, one subfolder per publication."""
 
 import re
 from pathlib import Path
@@ -13,8 +13,8 @@ def deliver(output_dir: Path, post: Post, epub_bytes: bytes) -> Path:
     folder = output_dir / safe_name(post.publication)
     path = folder / f"{post.published:%Y-%m-%d} {safe_name(post.title)}.epub"
     folder.mkdir(parents=True, exist_ok=True)
-    # Syncthing ignores files named .syncthing.*.tmp, so it never syncs a half-written EPUB.
-    temp = folder / f".syncthing.{path.name}.tmp"
+    # A dot file without the .epub suffix, so a half-written EPUB is never pushed or listed.
+    temp = folder / f".{path.name}.tmp"
     temp.write_bytes(epub_bytes)
     temp.replace(path)
     return path

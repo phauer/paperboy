@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 
 DEFAULT_BACKFILL = 3
 DEFAULT_STATE_FILE = "~/Library/Application Support/paperboy/state.db"
+DEFAULT_BOOX_FOLDER = "Books/Newsletters"
 
 
 class ConfigError(Exception):
@@ -18,10 +19,17 @@ class Publication:
 
 
 @dataclass(frozen=True)
+class Boox:
+    url: str  # BOOX Drop base URL, e.g. http://192.168.1.50:8085
+    folder: str  # library folder relative to the Boox's internal storage
+
+
+@dataclass(frozen=True)
 class Config:
     output_dir: Path
     state_file: Path
     publications: list[Publication]
+    boox: Boox | None = None
 
 
 def load_config(path: Path) -> Config:
@@ -35,7 +43,22 @@ def load_config(path: Path) -> Config:
         output_dir=_path(data, "output_dir", None, path),
         state_file=_path(data, "state_file", DEFAULT_STATE_FILE, path),
         publications=_publications(data, _backfill(data.get("backfill", DEFAULT_BACKFILL), path, "backfill"), path),
+        boox=_boox(data, path),
     )
+
+
+def _boox(data: dict, path: Path) -> Boox | None:
+    if "boox" not in data:
+        return None
+    section = data["boox"]
+    url = section.get("url") if isinstance(section, dict) else None
+    parsed = urlparse(url) if isinstance(url, str) else None
+    if not parsed or parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ConfigError(f'{path}: [boox] needs a \'url\' like "http://192.168.1.50:8085" (shown in BOOX Drop)')
+    folder = section.get("folder", DEFAULT_BOOX_FOLDER)
+    if not isinstance(folder, str) or not folder.strip("/ "):
+        raise ConfigError(f"{path}: [boox] 'folder' must be a non-empty path like \"{DEFAULT_BOOX_FOLDER}\"")
+    return Boox(url=url.rstrip("/"), folder=folder.strip("/ "))
 
 
 def _path(data: dict, key: str, default: str | None, path: Path) -> Path:

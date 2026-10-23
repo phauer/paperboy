@@ -12,6 +12,8 @@ import subprocess
 import tempfile
 import zipfile
 from datetime import UTC, datetime
+from email import policy
+from email.parser import BytesParser
 from email.utils import format_datetime
 from pathlib import Path
 
@@ -20,11 +22,14 @@ import pytest
 from PIL import Image
 
 from paperboy import schedule
+from paperboy.boox import STORAGE_ROOT
 from paperboy.cli import main
 from paperboy.pipeline import Deps, Pipeline
 from paperboy.state import StateStore
 
 HOST = "letter.example.com"
+BOOX_URL = "http://192.0.2.10:8085"
+LIBRARY = f"{STORAGE_ROOT}/Books/Newsletters"
 IMAGE_URL = "https://substackcdn.com/image/fetch/x.png"
 NOW = datetime(2026, 4, 1, 12, 0, tzinfo=UTC)
 VALID_COOKIE = "s%3Avalid-session.signature"
@@ -144,6 +149,92 @@ class FakeSubstack:
         return httpx.MockTransport(self.handler)
 
 
+class FakeBoox:
+    """Fake BOOX Drop server with an in-memory file system, mirroring the responses probed on a Go 7."""
+
+    def __init__(self):
+        self.online = True
+        self.dirs = {STORAGE_ROOT, f"{STORAGE_ROOT}/Books"}
+        self.files: dict[str, bytes] = {}
+        self.uploads: list[str] = []
+        self.requests = 0
+        self.reject_uploads: set[str] = set()  # file names the device refuses
+        self.sleep_after_uploads: int | None = None
+        self.page_size = 50
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        self.requests += 1
+        if not self.online:
+            raise httpx.ConnectError("No route to host", request=request)
+        path = request.url.path
+        if path == "/api/ping":
+            return httpx.Response(200, text="ok")
+        if path == "/api/storage" and request.method == "GET":
+            return self._list(json.loads(request.url.params["args"]))
+        if path == "/api/storage/directory" and request.method == "POST":
+            return self._make_dir(json.loads(request.content))
+        if path == "/api/storage/upload" and request.method == "POST":
+            return self._upload(request)
+        return httpx.Response(404)
+
+    def _list(self, args: dict) -> httpx.Response:
+        folder = args["dir"]
+        children = sorted(
+            [{"dir": True, "name": d.rsplit("/", 1)[1], "path": d, "size": 3488} for d in self.dirs if _parent(d) == folder]
+            + [{"dir": False, "name": f.rsplit("/", 1)[1], "path": f, "size": len(data)}
+               for f, data in self.files.items() if _parent(f) == folder],
+            key=lambda e: e["name"],
+        )
+        offset = args.get("offset", 0)
+        page = children[offset:offset + self.page_size]
+        return _ok({"data": {"count": len(children), "list": page}})
+
+    def _make_dir(self, body: dict) -> httpx.Response:
+        path = f"{body['parent']}/{body['name']}"
+        if body["parent"] not in self.dirs:
+            return _failed("parent not exist")
+        if path in self.dirs or path in self.files:
+            return _failed("There is file with the same name")
+        self.dirs.add(path)
+        return _ok({"message": path})
+
+    def _upload(self, request: httpx.Request) -> httpx.Response:
+        content_type = request.headers["content-type"].encode()
+        message = BytesParser(policy=policy.HTTP).parsebytes(b"Content-Type: " + content_type + b"\r\n\r\n" + request.read())
+        fields, name, data = {}, None, b""
+        for part in message.iter_parts():
+            if part.get_filename():
+                name, data = part.get_filename(), part.get_payload(decode=True)
+            else:
+                fields[part.get_param("name", header="content-disposition")] = part.get_content().strip()
+        if fields.get("dir") not in self.dirs:
+            return _failed("dir not exist")
+        if name in self.reject_uploads:
+            return _failed("storage full")
+        path = f"{fields['dir']}/{name}"
+        self.files[path] = data
+        self.uploads.append(path)
+        if self.sleep_after_uploads is not None and len(self.uploads) >= self.sleep_after_uploads:
+            self.online = False
+        return _ok({"message": path})
+
+    def library(self) -> list[str]:
+        """Files below the newsletter library, relative to it."""
+        return sorted(f.removeprefix(f"{LIBRARY}/") for f in self.files if f.startswith(f"{LIBRARY}/"))
+
+
+def _parent(path: str) -> str:
+    return path.rsplit("/", 1)[0]
+
+
+def _ok(body: dict) -> httpx.Response:
+    return httpx.Response(200, json={"code": 0, "successful": True, **body})
+
+
+def _failed(message: str) -> httpx.Response:
+    return httpx.Response(200, json={"code": -1, "message": message, "successful": False})
+
+
 def _rfc822(iso: str) -> str:
     return format_datetime(datetime.fromisoformat(iso.replace("Z", "+00:00")), usegmt=True)
 
@@ -215,6 +306,22 @@ def substack() -> FakeSubstack:
 
 
 @pytest.fixture
+def boox() -> FakeBoox:
+    return FakeBoox()
+
+
+@pytest.fixture
+def transport(substack, boox) -> httpx.MockTransport:
+    """One transport for everything: the Boox by its address, Substack for the rest."""
+    boox_host = httpx.URL(BOOX_URL).host
+
+    def route(request: httpx.Request) -> httpx.Response:
+        return boox.handler(request) if request.url.host == boox_host else substack.handler(request)
+
+    return httpx.MockTransport(route)
+
+
+@pytest.fixture
 def output_dir(tmp_path: Path) -> Path:
     return tmp_path / "Newsletters"
 
@@ -232,19 +339,19 @@ def state(state_file: Path):
 
 
 @pytest.fixture
-def pipeline(substack, output_dir, state, secrets, notifier):
-    with httpx.Client(transport=substack.transport()) as http:
+def pipeline(transport, output_dir, state, secrets, notifier):
+    with httpx.Client(transport=transport) as http:
         yield Pipeline(
             Deps(http=http, output_dir=output_dir, state=state, secrets=secrets, notifier=notifier, clock=lambda: NOW)
         )
 
 
 @pytest.fixture
-def cli(substack, secrets, notifier):
-    """Run the CLI against the fakes; never touches the real Keychain or notifications."""
+def cli(transport, secrets, notifier):
+    """Run the CLI against the fakes; never touches the real Keychain, notifications or Boox."""
 
     def run(*argv: str) -> int:
-        return main(list(argv), transport=substack.transport(), secrets=secrets, notifier=notifier)
+        return main(list(argv), transport=transport, secrets=secrets, notifier=notifier)
 
     return run
 

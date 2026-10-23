@@ -2,10 +2,11 @@ import os
 import plistlib
 import sys
 
-from conftest import HOST
+from conftest import BOOX_URL, HOST
 from paperboy import schedule
 
 PUBLICATIONS = f'[[publications]]\nurl = "https://{HOST}"\n'
+BOOX_CONFIG = f'{PUBLICATIONS}\n[boox]\nurl = "{BOOX_URL}"\n'
 
 
 def test_show_prints_an_hourly_job_with_absolute_paths(cli, write_config, capsys, tmp_path, monkeypatch):
@@ -34,10 +35,47 @@ def test_install_writes_job_and_loads_it(cli, write_config, launchd, capsys):
     assert schedule.LOG_FILE.parent.is_dir()
     domain = f"gui/{os.getuid()}"
     assert launchd.calls == [
+        ["launchctl", "bootout", f"{domain}/local.paperboy.push"],  # no Boox configured
         ["launchctl", "bootout", f"{domain}/local.paperboy"],
         ["launchctl", "bootstrap", domain, str(plist)],
     ]
-    assert "Hourly run installed" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "Hourly run installed" in out and "Push to the Boox" not in out
+    assert not (schedule.LAUNCH_AGENTS / "local.paperboy.push.plist").exists()
+
+
+def test_install_with_boox_adds_a_push_job_every_5_minutes(cli, write_config, launchd, capsys):
+    config = write_config(BOOX_CONFIG)
+
+    assert cli("schedule", "install", "--config", str(config)) == 0
+
+    plist = schedule.LAUNCH_AGENTS / "local.paperboy.push.plist"
+    job = plistlib.loads(plist.read_bytes())
+    assert job["ProgramArguments"] == [
+        sys.executable, "-m", "paperboy.cli", "push", "--quiet", "--config", str(config.resolve())
+    ]
+    assert job["StartInterval"] == 300
+    assert job["StandardOutPath"] == str(schedule.LOG_FILE)
+    assert ["launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist)] in launchd.calls
+    assert (schedule.LAUNCH_AGENTS / "local.paperboy.plist").exists()
+    assert "Push to the Boox every 5 minutes installed" in capsys.readouterr().out
+
+
+def test_removing_the_boox_from_the_config_removes_the_push_job(cli, write_config):
+    cli("schedule", "install", "--config", str(write_config(BOOX_CONFIG)))
+
+    cli("schedule", "install", "--config", str(write_config(PUBLICATIONS)))
+
+    assert not (schedule.LAUNCH_AGENTS / "local.paperboy.push.plist").exists()
+    assert (schedule.LAUNCH_AGENTS / "local.paperboy.plist").exists()
+
+
+def test_show_prints_both_jobs_with_a_boox(cli, write_config, capsys):
+    assert cli("schedule", "show", "--config", str(write_config(BOOX_CONFIG))) == 0
+
+    out = capsys.readouterr().out
+    assert out.count("<?xml") == 2
+    assert "<string>local.paperboy</string>" in out and "<string>local.paperboy.push</string>" in out
 
 
 def test_install_twice_replaces_the_job(cli, write_config, launchd):
@@ -46,7 +84,7 @@ def test_install_twice_replaces_the_job(cli, write_config, launchd):
     cli("schedule", "install", "--config", str(config))
     cli("schedule", "install", "--config", str(config))
 
-    assert [call[1] for call in launchd.calls] == ["bootout", "bootstrap", "bootout", "bootstrap"]
+    assert [call[1] for call in launchd.calls] == ["bootout", "bootout", "bootstrap"] * 2
 
 
 def test_install_reports_launchctl_failure(cli, write_config, launchd, capsys):
@@ -64,16 +102,21 @@ def test_install_refuses_broken_or_empty_config(cli, write_config, launchd, tmp_
     assert not schedule.LAUNCH_AGENTS.exists()
 
 
-def test_uninstall_stops_and_removes_the_job(cli, write_config, launchd, capsys):
-    cli("schedule", "install", "--config", str(write_config(PUBLICATIONS)))
+def test_uninstall_stops_and_removes_both_jobs(cli, write_config, launchd, capsys):
+    cli("schedule", "install", "--config", str(write_config(BOOX_CONFIG)))
+    launchd.calls.clear()
 
     assert cli("schedule", "uninstall") == 0
 
-    assert not (schedule.LAUNCH_AGENTS / "local.paperboy.plist").exists()
-    assert launchd.calls[-1][1] == "bootout"
-    assert "Hourly run removed." in capsys.readouterr().out
+    assert list(schedule.LAUNCH_AGENTS.glob("*.plist")) == []
+    domain = f"gui/{os.getuid()}"
+    assert launchd.calls == [
+        ["launchctl", "bootout", f"{domain}/local.paperboy"],
+        ["launchctl", "bootout", f"{domain}/local.paperboy.push"],
+    ]
+    assert "Scheduled jobs removed." in capsys.readouterr().out
 
 
 def test_uninstall_without_job(cli, capsys):
     assert cli("schedule", "uninstall") == 0
-    assert "No hourly run was installed." in capsys.readouterr().out
+    assert "No scheduled job was installed." in capsys.readouterr().out

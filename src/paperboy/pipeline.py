@@ -8,7 +8,8 @@ from pathlib import Path
 
 import httpx
 
-from paperboy.config import Publication
+from paperboy.boox import STORAGE_ROOT, BooxDrop, BooxError
+from paperboy.config import Boox, Publication
 from paperboy.converter import build_epub
 from paperboy.delivery import deliver
 from paperboy.feed import discover_post_urls
@@ -40,6 +41,15 @@ class RunReport:
     skipped: int = 0
     pending_auth: int = 0
     errors: list[str] = field(default_factory=list)
+    push: "PushReport | None" = None
+
+
+@dataclass
+class PushReport:
+    pushed: list[Path] = field(default_factory=list)
+    waiting: int = 0  # files that stay on the Mac until the Boox is reachable
+    reachable: bool = True
+    errors: list[str] = field(default_factory=list)
 
 
 class Pipeline:
@@ -51,8 +61,8 @@ class Pipeline:
         post = fetch_post(self._deps.http, url, self._deps.secrets.get(COOKIE_NAME))
         return deliver(self._deps.output_dir, post, build_epub(post, self._fetch_image))
 
-    def run(self, publications: list[Publication]) -> RunReport:
-        """Convert all new posts of the given publications. Raises AlreadyRunning."""
+    def run(self, publications: list[Publication], boox: Boox | None = None) -> RunReport:
+        """Convert all new posts of the given publications, then push them to the Boox. Raises AlreadyRunning."""
         report = RunReport()
         with self._deps.state.lock():
             for publication in publications:
@@ -62,7 +72,14 @@ class Pipeline:
                     # Not marked as known, so a first-time publication gets its backfill next run.
                     log.warning("Skipping %s this run: %s", publication.host, e)
                     report.errors.append(str(e))
+            if boox:
+                report.push = self._push(boox)
         return report
+
+    def push(self, boox: Boox) -> PushReport:
+        """Upload EPUBs the Boox hasn't received yet. Raises AlreadyRunning (that run pushes at its end)."""
+        with self._deps.state.lock():
+            return self._push(boox)
 
     def _run_publication(self, publication: Publication, report: RunReport) -> None:
         state, host = self._deps.state, publication.host
@@ -93,6 +110,39 @@ class Pipeline:
             state.record_post(host, slug, url=url, status="done", file=path, at=self._deps.clock())
             report.converted.append(path)
         state.add_publication(host, self._deps.clock())
+
+    def _push(self, boox: Boox) -> PushReport:
+        report, state = PushReport(), self._deps.state
+        pending = [
+            (path, key, size)
+            for path in sorted(self._deps.output_dir.glob("*/*.epub"))
+            for key in [path.relative_to(self._deps.output_dir).as_posix()]
+            for size in [path.stat().st_size]
+            # Pushed once means delivered: an issue deleted on the Boox stays deleted.
+            if state.pushed_size(key) != size
+        ]
+        if not pending:
+            return report
+        device = BooxDrop(self._deps.http, boox.url)
+        if not device.reachable():
+            report.reachable, report.waiting = False, len(pending)
+            return report
+        for index, (path, key, size) in enumerate(pending):
+            folder = f"{STORAGE_ROOT}/{boox.folder}/{path.parent.name}"
+            try:
+                device.ensure_dir(folder)
+                device.upload(folder, path.name, path.read_bytes())
+            except BooxError as e:
+                log.warning("Will push %s again next time: %s", key, e)
+                report.errors.append(str(e))
+                continue
+            except httpx.TransportError as e:
+                log.info("Lost the Boox, %d files follow next time: %s", len(pending) - index, e)
+                report.reachable, report.waiting = False, len(pending) - index
+                break
+            state.record_push(key, size, self._deps.clock())
+            report.pushed.append(path)
+        return report
 
     def cookie_updated(self) -> None:
         """A new cookie was stored: the next expiry deserves a new notification."""

@@ -5,7 +5,7 @@ Turns Substack posts into clean EPUBs for e-ink readers like the Boox Go 7.
 ## Status
 
 Early work in progress.
-It converts new free and paid posts of the configured publications every hour and syncs them to the Boox via Syncthing.
+It converts new free and paid posts of the configured publications every hour and pushes them to the Boox via BOOX Drop.
 Open work is tracked in `.scratch/paperboy/`.
 
 ## Setup
@@ -66,49 +66,56 @@ An image that can't be downloaded or decoded is left out; its caption and the re
 
 ## Automatic Delivery to the Boox
 
-The Mac converts new posts every hour into `output_dir`; Syncthing carries them to the Boox library.
-Delivery happens whenever the Mac is awake and the Boox is on Wi-Fi.
+The Mac converts new posts every hour into `output_dir` and pushes them to the Boox over **BOOX Drop**, the web server built into Boox devices.
+Nothing needs to be installed on the Boox.
+The Boox's server only answers while the device is awake and on Wi-Fi, so the Mac tries every 5 minutes; until then, new issues wait on the Mac.
 
 ### 1. Choose the Output Folder
 
-Set `output_dir` in `config.toml` to the folder you want to sync, e.g. `~/Books/Newsletters`, and add your `[[publications]]`.
+Set `output_dir` in `config.toml`, e.g. `~/Books/Newsletters`, and add your `[[publications]]`.
 Run `uv run paperboy run` once to check that issues appear there.
 
-### 2. Syncthing on the Mac
+### 2. Connect the Boox
+
+1. On the Boox, open **BOOX Drop** once.
+   It shows the device's address, e.g. `http://192.168.1.50:8085`.
+2. Give the Boox a fixed IP address in your router, so the address doesn't change.
+3. Add it to `config.toml`:
+
+   ```toml
+   [boox]
+   url = "http://192.168.1.50:8085"
+   # folder = "Books/Newsletters"   # library folder on the Boox (default)
+   ```
+
+4. Push once by hand:
+
+   ```sh
+   uv run paperboy push
+   ```
+
+Issues land in `Books/Newsletters/<Publication>/` and appear in NeoReader's library without a refresh.
+You don't need to keep the BOOX Drop screen open; the server comes back on its own when the Boox wakes.
+
+Each issue is pushed once.
+Issues you delete on the Boox stay deleted, and the Mac never recreates processed posts.
+An issue that is converted again with a different file size replaces the copy on the Boox.
+
+### 3. Run on a Schedule
 
 ```sh
-brew install syncthing
-brew services start syncthing   # starts now and at every login
+uv run paperboy schedule install    # installs the launchd jobs and runs once right away
+uv run paperboy schedule show       # prints the job definitions
+uv run paperboy schedule uninstall  # removes them again
 ```
 
-Open the web UI at <http://127.0.0.1:8384>.
+Two jobs are installed:
 
-### 3. Syncthing on the Boox
+- **Hourly run:** at the start of every hour, and right after the Mac wakes if it slept through a run; it converts new posts and pushes them.
+- **Push every 5 minutes** (only with a `[boox]` section): delivers waiting issues as soon as the Boox is awake; it stays silent when there's nothing to do.
 
-1. Install **Syncthing-Fork** from Google Play (or F-Droid) and grant it access to all files.
-2. Allow it to run in the background: in the BOOX app management settings, turn off freezing for Syncthing-Fork, and exempt it from battery optimization.
-   Without this, the Boox stops Syncthing as soon as the screen locks.
-3. In Syncthing-Fork's settings, check the run conditions (e.g. Wi-Fi only) match how you use the device.
-
-### 4. Pair the Devices and Share the Folder
-
-1. In the Mac web UI, choose **Add Remote Device** and scan or paste the Boox's device ID (shown in Syncthing-Fork).
-2. Choose **Add Folder** on the Mac: folder path = your `output_dir`, folder type **Send Only**, and share it with the Boox.
-3. Accept the share on the Boox: folder path `/storage/emulated/0/Books/Newsletters`, folder type **Receive Only**.
-
-New issues then appear in NeoReader's library under `Books/Newsletters/<Publication>/`.
-Issues you delete on the Boox stay deleted; the Mac never recreates processed posts.
-
-### 5. Run Every Hour
-
-```sh
-uv run paperboy schedule install    # installs a launchd job and runs it right away
-uv run paperboy schedule show       # prints the job definition
-uv run paperboy schedule uninstall  # removes it again
-```
-
-The job runs at the start of every hour, and right after the Mac wakes if it slept through a run.
-It uses the config file you pass (default `./config.toml`) with an absolute path, so keep the project where it is.
+They use the config file you pass (default `./config.toml`) with an absolute path, so keep the project where it is.
+Run `schedule install` again after adding or removing the `[boox]` section.
 Output and errors go to `~/Library/Logs/paperboy/paperboy.log`.
 
 ## Development

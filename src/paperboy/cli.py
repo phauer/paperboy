@@ -11,7 +11,7 @@ import httpx
 from paperboy.config import Config, ConfigError, load_config
 from paperboy.macos import KeychainStore, MacNotifier, Notifier, SecretStore
 from paperboy import schedule
-from paperboy.pipeline import Deps, Pipeline
+from paperboy.pipeline import Deps, Pipeline, PushReport
 from paperboy.state import AlreadyRunning, StateStore
 from paperboy.substack import COOKIE_NAME, AuthExpired, SourceError, normalize_cookie
 
@@ -37,6 +37,9 @@ def main(
     if args.command == "run" and not config.publications:
         print(f"error: no [[publications]] configured in {args.config}", file=sys.stderr)
         return 2
+    if args.command == "push" and not config.boox:
+        print(f"error: no [boox] url configured in {args.config}", file=sys.stderr)
+        return 2
 
     state = StateStore(config.state_file)
     try:
@@ -51,6 +54,8 @@ def main(
             pipeline = Pipeline(deps)
             if args.command == "set-cookie":
                 return _set_cookie(pipeline, deps.secrets)
+            if args.command == "push":
+                return _push(pipeline, config, args.quiet)
             return _run(pipeline, config) if args.command == "run" else _convert(pipeline, args.url)
     finally:
         state.close()
@@ -69,7 +74,7 @@ def _convert(pipeline: Pipeline, url: str) -> int:
 def _run(pipeline: Pipeline, config: Config) -> int:
     logging.info("Run started for %d publications", len(config.publications))
     try:
-        report = pipeline.run(config.publications)
+        report = pipeline.run(config.publications, config.boox)
     except AlreadyRunning:
         print("Another run is in progress, nothing to do.")
         return 0
@@ -81,7 +86,33 @@ def _run(pipeline: Pipeline, config: Config) -> int:
     )
     if report.pending_auth:
         print("Paid posts need a valid Substack cookie: run 'paperboy set-cookie'.")
+    if report.push:
+        _print_push(report.push)
+    return 1 if report.errors or (report.push and report.push.errors) else 0
+
+
+def _push(pipeline: Pipeline, config: Config, quiet: bool) -> int:
+    try:
+        report = pipeline.push(config.boox)
+    except AlreadyRunning:
+        return 0  # the running run pushes when it's done
+    if not quiet or report.pushed or report.errors:
+        _print_push(report)
     return 1 if report.errors else 0
+
+
+def _print_push(report: PushReport) -> None:
+    for path in report.pushed:
+        print(f"pushed: {path}")
+    for error in report.errors:
+        print(f"error: {error}")
+    if not report.reachable:
+        print(f"{len(report.pushed)} pushed to the Boox; it's not reachable (asleep or off Wi-Fi), "
+              f"{report.waiting} files wait on the Mac.")
+    elif report.pushed or report.errors:
+        print(f"{len(report.pushed)} pushed to the Boox, {len(report.errors)} errors")
+    else:
+        print("The Boox is up to date.")
 
 
 def _set_cookie(pipeline: Pipeline, secrets: SecretStore) -> int:
@@ -105,22 +136,27 @@ def _set_cookie(pipeline: Pipeline, secrets: SecretStore) -> int:
     return 0
 
 
-def _schedule(action: str, config: Path) -> int:
-    if action == "show":
-        sys.stdout.write(schedule.render_plist(config).decode())
-        return 0
+def _schedule(action: str, config_path: Path) -> int:
     if action == "uninstall":
         removed = schedule.uninstall()
-        print("Hourly run removed." if removed else "No hourly run was installed.")
+        print("Scheduled jobs removed." if removed else "No scheduled job was installed.")
         return 0
     try:
-        if not load_config(config).publications:  # fail now, not silently every hour
-            raise ConfigError(f"no [[publications]] configured in {config}")
-        plist = schedule.install(config)
+        config = load_config(config_path)
+        if not config.publications:  # fail now, not silently every hour
+            raise ConfigError(f"no [[publications]] configured in {config_path}")
+        if action == "show":
+            sys.stdout.write(schedule.render_plist(config_path).decode())
+            if config.boox:
+                sys.stdout.write(schedule.render_push_plist(config_path).decode())
+            return 0
+        plists = schedule.install(config_path, push=config.boox is not None)
     except (ConfigError, schedule.ScheduleError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
-    print(f"Hourly run installed ({plist}); it also runs right now and after the Mac wakes.")
+    print(f"Hourly run installed ({plists[0]}); it also runs right now and after the Mac wakes.")
+    if config.boox:
+        print(f"Push to the Boox every {schedule.PUSH_INTERVAL // 60} minutes installed ({plists[1]}).")
     print(f"Log: {schedule.LOG_FILE}")
     return 0
 
@@ -131,8 +167,10 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="paperboy", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("run", parents=[common], help="convert all new posts of the configured publications")
+    push = commands.add_parser("push", parents=[common], help="upload EPUBs the Boox hasn't received yet")
+    push.add_argument("--quiet", action="store_true", help="print only when something was pushed or failed")
     commands.add_parser("set-cookie", parents=[common], help="store the Substack session cookie in the Keychain")
-    scheduling = commands.add_parser("schedule", parents=[common], help="run every hour via launchd")
+    scheduling = commands.add_parser("schedule", parents=[common], help="run every hour (and push every 5 minutes) via launchd")
     scheduling.add_argument("action", choices=["install", "uninstall", "show"])
     convert = commands.add_parser("convert", parents=[common], help="convert a single post URL into an EPUB")
     convert.add_argument("url", help="post URL, e.g. https://example.substack.com/p/some-post")

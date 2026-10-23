@@ -25,6 +25,11 @@ CREATE TABLE IF NOT EXISTS posts (
 CREATE TABLE IF NOT EXISTS flags (
     name TEXT PRIMARY KEY
 );
+CREATE TABLE IF NOT EXISTS pushes (
+    file TEXT PRIMARY KEY,
+    size INTEGER NOT NULL,
+    pushed_at TEXT NOT NULL
+);
 """
 
 # Posts with these statuses are finished and never processed again.
@@ -83,6 +88,15 @@ class StateStore:
                 "INSERT OR REPLACE INTO posts VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (publication, slug, url, status, reason, str(file) if file else None, at.isoformat()),
             )
+
+    def pushed_size(self, file: str) -> int | None:
+        """Size of the file when it was last pushed to the Boox, None if it never was."""
+        row = self._db.execute("SELECT size FROM pushes WHERE file = ?", (file,)).fetchone()
+        return row[0] if row else None
+
+    def record_push(self, file: str, size: int, at: datetime) -> None:
+        with self._db:
+            self._db.execute("INSERT OR REPLACE INTO pushes VALUES (?, ?, ?)", (file, size, at.isoformat()))
 
     def has_flag(self, name: str) -> bool:
         return self._db.execute("SELECT 1 FROM flags WHERE name = ?", (name,)).fetchone() is not None
