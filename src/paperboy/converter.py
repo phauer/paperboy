@@ -8,6 +8,7 @@ from ebooklib import epub
 from lxml import etree, html
 
 from paperboy.cleanup import remove_clutter, tidy
+from paperboy.cover import render_cover
 from paperboy.images import EmbeddedImage, FetchImage, embed_images
 from paperboy.post import Post
 
@@ -38,6 +39,12 @@ def build_epub(post: Post, fetch_image: FetchImage) -> bytes:
         book.add_author(post.author)
     book.add_metadata("DC", "date", post.published.date().isoformat())
     book.add_metadata("DC", "publisher", post.publication)
+    if post.subtitle:
+        book.add_metadata("DC", "description", post.subtitle)
+    _add_series(book, post)
+    book.set_cover(
+        "cover.jpg", render_cover(post.publication, post.title, post.author, post.published), create_page=False
+    )
 
     css = epub.EpubItem(uid="style", file_name="style.css", media_type="text/css", content=_CSS)
     book.add_item(css)
@@ -59,6 +66,18 @@ def build_epub(post: Post, fetch_image: FetchImage) -> bytes:
     buffer = io.BytesIO()
     epub.write_epub(buffer, book)
     return buffer.getvalue()
+
+
+def _add_series(book: epub.EpubBook, post: Post) -> None:
+    """The publication as a series, indexed by date, so issues group and sort in the library."""
+    index = post.published.strftime("%Y%m%d")
+    # EPUB 3 collection, read by newer readers ...
+    book.add_metadata(None, "meta", post.publication, {"property": "belongs-to-collection", "id": "series"})
+    book.add_metadata(None, "meta", "series", {"refines": "#series", "property": "collection-type"})
+    book.add_metadata(None, "meta", index, {"refines": "#series", "property": "group-position"})
+    # ... and Calibre's convention, read by most others.
+    book.add_metadata(None, "meta", "", {"name": "calibre:series", "content": post.publication})
+    book.add_metadata(None, "meta", "", {"name": "calibre:series_index", "content": index})
 
 
 def _chapter(title: str, file_name: str, language: str, body: str, css: epub.EpubItem) -> epub.EpubHtml:

@@ -22,6 +22,7 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "pytest-xdist>=3.8.0",
 ]
 
 [project.scripts]
@@ -30,3 +31,5 @@ paperboy = "paperboy.cli:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["tests"]
+# epubcheck starts a JVM per EPUB, so run tests in parallel.
+addopts = "-n auto"

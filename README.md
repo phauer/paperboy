@@ -6,7 +6,7 @@ Turns Substack posts into clean EPUBs for e-ink readers like the Boox Go 7.
 
 Early work in progress.
 Today it converts new free and paid posts of the configured publications, including their images.
-Covers and automatic syncing follow (see `.scratch/paperboy/`).
+Automatic syncing to the Boox follows (see `.scratch/paperboy/`).
 
 ## Setup
 
@@ -53,6 +53,8 @@ Only one `run` can be active at a time.
 `run` exits with code 1 if any errors occurred, so schedulers can flag them.
 
 Each EPUB has a title page (title, subtitle, author, publication, date), the post body and a link to the original at the end.
+Its generated cover shows publication, title, author and date in large type, so issues are easy to tell apart as thumbnails.
+The publication is set as the series (indexed by date), so readers that support series group and sort the issues.
 The body is cleaned up for reading: subscribe and share prompts, comment buttons, the paywall marker and app banners are removed.
 Buttons that lead somewhere meaningful (e.g. to a book) stay as plain links; YouTube videos, tweets and embedded posts become links or quotes.
 Tracking parameters are stripped from links, footnotes link both ways, code blocks wrap, and section headings appear in the reader's table of contents.
@@ -67,7 +69,7 @@ An image that can't be downloaded or decoded is left out; its caption and the re
 uv run pytest
 ```
 
-Tests go through the pipeline with a mocked Substack API and anonymized, made-up fixtures.
+Tests run in parallel (pytest-xdist) and go through the pipeline with a mocked Substack API and anonymized, made-up fixtures.
 Tests that build EPUBs validate them with epubcheck and are skipped if it is not installed.
 epubcheck's image check needs a writable Java temp folder; the test helper points `java.io.tmpdir` at Python's temp folder, so it also works in sandboxes.
 Real API responses for exploration belong in the gitignored `samples/` folder.
