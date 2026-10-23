@@ -1,0 +1,18 @@
+# Personal config and secrets
+config.toml
+.env
+
+# Real Substack responses (personal, paid content) — tests use anonymized fixtures
+samples/
+
+# Generated EPUBs
+output/
+
+# Python
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+
+# Local Claude Code settings
+.claude/settings.local.json

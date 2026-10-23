@@ -1,0 +1,5 @@
+# Copy to config.toml (gitignored) and adjust.
+
+# Folder the EPUBs are written to; one subfolder per publication.
+# Share this folder with the Boox via Syncthing.
+output_dir = "~/Books/Newsletters"
