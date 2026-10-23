@@ -5,8 +5,8 @@ Turns Substack posts into clean EPUBs for e-ink readers like the Boox Go 7.
 ## Status
 
 Early work in progress.
-Today you can convert a single free post on demand, including its images.
-Feed discovery, paid posts, covers and automatic syncing follow (see `.scratch/paperboy/`).
+Today it converts new free posts of the configured publications, including their images.
+Paid posts, covers and automatic syncing follow (see `.scratch/paperboy/`).
 
 ## Setup
 
@@ -14,17 +14,25 @@ Requirements: [uv](https://docs.astral.sh/uv/) and epubcheck (`brew install epub
 
 ```sh
 uv sync
-cp config.example.toml config.toml   # then set output_dir
+cp config.example.toml config.toml   # then set output_dir and your publications
 ```
 
 ## Usage
 
 ```sh
-uv run paperboy convert https://<publication>/p/<slug>
+uv run paperboy run                                    # all new posts of the configured publications
+uv run paperboy convert https://<publication>/p/<slug>  # one specific post
 ```
 
-The EPUB lands in `<output_dir>/<Publication>/YYYY-MM-DD <Title>.epub`.
-Use `--output <folder>` to override `output_dir`, or `--config <file>` to use another config file.
+EPUBs land in `<output_dir>/<Publication>/YYYY-MM-DD <Title>.epub`.
+Both commands accept `--config <file>`; `convert` also accepts `--output <folder>` to override `output_dir`.
+
+`run` discovers new posts through each publication's RSS feed.
+The first time it sees a publication, it converts only the newest posts (`backfill`, default 3) and marks older ones as skipped.
+After that, every new post is converted exactly once, even if you delete the file.
+A failing feed or post doesn't stop the others; posts that failed with a network or server error are retried on the next run.
+Only one `run` can be active at a time.
+`run` exits with code 1 if any errors occurred, so schedulers can flag them.
 
 Each EPUB has a title page (title, subtitle, author, publication, date), the post body and a link to the original at the end.
 Images are embedded for offline reading and optimized for a monochrome e-ink screen.

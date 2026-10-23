@@ -11,6 +11,8 @@ import shutil
 import subprocess
 import tempfile
 import zipfile
+from datetime import UTC, datetime
+from email.utils import format_datetime
 from pathlib import Path
 
 import httpx
@@ -18,9 +20,11 @@ import pytest
 from PIL import Image
 
 from paperboy.pipeline import Deps, Pipeline
+from paperboy.state import StateStore
 
 HOST = "letter.example.com"
 IMAGE_URL = "https://substackcdn.com/image/fetch/x.png"
+NOW = datetime(2026, 4, 1, 12, 0, tzinfo=UTC)
 
 FREE_BODY = """\
 <p>Hello readers, this is <strong>Erika Mustermann</strong> with <a href="https://example.org/a">a link</a>.</p>
@@ -58,32 +62,73 @@ def make_post_json(**overrides) -> dict:
 
 
 class FakeSubstack:
-    """Serves post JSON by slug, like the Substack post API, plus image files by URL."""
+    """Fake Substack: post API and RSS feed per publication host, plus files by URL."""
 
     def __init__(self):
-        self.posts: dict[str, dict] = {}
+        self.posts: dict[tuple[str, str], dict] = {}
+        self.feeds: dict[str, list[str]] = {}
         self.files: dict[str, bytes] = {}
+        self.errors: dict[str, int] = {}
         self.requests: list[str] = []
-        self.status_override: int | None = None
 
-    def add(self, post_json: dict) -> str:
-        self.posts[post_json["slug"]] = post_json
-        return f"https://{HOST}/p/{post_json['slug']}"
+    def add(self, post_json: dict, host: str = HOST) -> str:
+        """Make a post available via the post API and return its URL."""
+        url = f"https://{host}/p/{post_json['slug']}"
+        self.posts[(host, post_json["slug"])] = {**post_json, "canonical_url": url}
+        return url
+
+    def publish(self, *post_jsons: dict, host: str = HOST) -> list[str]:
+        """Add posts and put them on top of the host's feed (first argument ends up newest)."""
+        urls = [self.add(post_json, host) for post_json in post_jsons]
+        self.feeds[host] = [post_json["slug"] for post_json in post_jsons] + self.feeds.get(host, [])
+        return urls
 
     def handler(self, request: httpx.Request) -> httpx.Response:
-        self.requests.append(str(request.url))
-        if str(request.url) in self.files:
-            return httpx.Response(200, content=self.files[str(request.url)])
-        if self.status_override:
-            return httpx.Response(self.status_override)
-        prefix = "/api/v1/posts/"
-        slug = request.url.path.removeprefix(prefix)
-        if request.url.host == HOST and request.url.path.startswith(prefix) and slug in self.posts:
-            return httpx.Response(200, content=json.dumps(self.posts[slug]))
+        url, host, path = str(request.url), request.url.host, request.url.path
+        self.requests.append(url)
+        if url in self.errors:
+            return httpx.Response(self.errors[url])
+        if url in self.files:
+            return httpx.Response(200, content=self.files[url])
+        if path == "/feed" and host in self.feeds:
+            return httpx.Response(200, content=self._feed_xml(host))
+        slug = path.removeprefix("/api/v1/posts/")
+        if path.startswith("/api/v1/posts/") and (host, slug) in self.posts:
+            return httpx.Response(200, content=json.dumps(self.posts[(host, slug)]))
         return httpx.Response(404)
+
+    def _feed_xml(self, host: str) -> str:
+        items = "".join(
+            f"<item><title>{post['title']}</title><link>https://{host}/p/{slug}</link>"
+            f"<guid isPermaLink=\"false\">https://{host}/p/{slug}</guid>"
+            f"<pubDate>{_rfc822(post['post_date'])}</pubDate></item>"
+            for slug in self.feeds[host]
+            for post in [self.posts[(host, slug)]]
+        )
+        return f'<?xml version="1.0"?><rss version="2.0"><channel><title>{host}</title>{items}</channel></rss>'
+
+    def api_url(self, slug: str, host: str = HOST) -> str:
+        return f"https://{host}/api/v1/posts/{slug}"
+
+    def post_api_requests(self) -> list[str]:
+        return [url for url in self.requests if "/api/v1/posts/" in url]
 
     def transport(self) -> httpx.MockTransport:
         return httpx.MockTransport(self.handler)
+
+
+def _rfc822(iso: str) -> str:
+    return format_datetime(datetime.fromisoformat(iso.replace("Z", "+00:00")), usegmt=True)
+
+
+def numbered_post(number: int, **overrides) -> dict:
+    """Post number N; higher numbers are newer."""
+    return make_post_json(
+        slug=f"post-{number}",
+        title=f"Post {number}",
+        post_date=f"2026-03-{number:02d}T09:00:00.000Z",
+        **overrides,
+    )
 
 
 @pytest.fixture
@@ -97,9 +142,33 @@ def output_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def pipeline(substack: FakeSubstack, output_dir: Path):
+def state_file(tmp_path: Path) -> Path:
+    return tmp_path / "state" / "state.db"
+
+
+@pytest.fixture
+def state(state_file: Path):
+    store = StateStore(state_file)
+    yield store
+    store.close()
+
+
+@pytest.fixture
+def pipeline(substack: FakeSubstack, output_dir: Path, state: StateStore):
     with httpx.Client(transport=substack.transport()) as http:
-        yield Pipeline(Deps(http=http, output_dir=output_dir))
+        yield Pipeline(Deps(http=http, output_dir=output_dir, state=state, clock=lambda: NOW))
+
+
+@pytest.fixture
+def write_config(tmp_path: Path, output_dir: Path, state_file: Path):
+    """Write a config.toml; extra TOML is appended verbatim."""
+
+    def write(extra: str = "") -> Path:
+        path = tmp_path / "config.toml"
+        path.write_text(f'output_dir = "{output_dir}"\nstate_file = "{state_file}"\n{extra}')
+        return path
+
+    return write
 
 
 def make_image(size=(3000, 1000), mode="RGB", color=(200, 30, 30), format="PNG") -> bytes:

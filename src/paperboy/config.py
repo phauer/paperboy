@@ -1,6 +1,10 @@
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
+
+DEFAULT_BACKFILL = 3
+DEFAULT_STATE_FILE = "~/Library/Application Support/paperboy/state.db"
 
 
 class ConfigError(Exception):
@@ -8,8 +12,16 @@ class ConfigError(Exception):
 
 
 @dataclass(frozen=True)
+class Publication:
+    host: str
+    backfill: int
+
+
+@dataclass(frozen=True)
 class Config:
     output_dir: Path
+    state_file: Path
+    publications: list[Publication]
 
 
 def load_config(path: Path) -> Config:
@@ -19,7 +31,39 @@ def load_config(path: Path) -> Config:
         raise ConfigError(f"Config file not found: {path} (copy config.example.toml to get started)")
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"Invalid TOML in {path}: {e}") from e
-    output_dir = data.get("output_dir")
-    if not isinstance(output_dir, str) or not output_dir:
-        raise ConfigError(f"{path}: 'output_dir' must be a non-empty string")
-    return Config(output_dir=Path(output_dir).expanduser())
+    return Config(
+        output_dir=_path(data, "output_dir", None, path),
+        state_file=_path(data, "state_file", DEFAULT_STATE_FILE, path),
+        publications=_publications(data, _backfill(data.get("backfill", DEFAULT_BACKFILL), path, "backfill"), path),
+    )
+
+
+def _path(data: dict, key: str, default: str | None, path: Path) -> Path:
+    value = data.get(key, default)
+    if not isinstance(value, str) or not value:
+        raise ConfigError(f"{path}: '{key}' must be a non-empty string")
+    return Path(value).expanduser()
+
+
+def _backfill(value: object, path: Path, where: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ConfigError(f"{path}: '{where}' must be a whole number >= 0")
+    return value
+
+
+def _publications(data: dict, default_backfill: int, path: Path) -> list[Publication]:
+    entries = data.get("publications", [])
+    if not isinstance(entries, list):
+        raise ConfigError(f"{path}: 'publications' must be a list of [[publications]] tables")
+    publications: dict[str, Publication] = {}
+    for number, entry in enumerate(entries, start=1):
+        where = f"publication #{number}"
+        url = entry.get("url") if isinstance(entry, dict) else None
+        parsed = urlparse(url if isinstance(url, str) and "://" in url else f"https://{url}")
+        if not isinstance(url, str) or not parsed.hostname:
+            raise ConfigError(f"{path}: {where} needs a 'url' like \"https://example.substack.com\"")
+        if parsed.hostname in publications:
+            raise ConfigError(f"{path}: {where} duplicates {parsed.hostname}")
+        backfill = _backfill(entry.get("backfill", default_backfill), path, f"{where}.backfill")
+        publications[parsed.hostname] = Publication(host=parsed.hostname, backfill=backfill)
+    return list(publications.values())

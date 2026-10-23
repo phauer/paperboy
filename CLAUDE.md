@@ -18,7 +18,8 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
 
 ## Architecture
 
-- `Pipeline` is the single entry point for the CLI and the tests; all I/O (HTTP client, output folder) comes in via `Deps`.
+- `Pipeline` is the single entry point for the CLI and the tests (`run` for feeds, `convert` for one post); all I/O (HTTP client, output folder, state store, clock) comes in via `Deps`.
+- `feed` discovers post URLs from a publication's RSS feed; `state` (SQLite) records processed posts and known publications and holds the run lock.
 - `substack` fetches a post and normalizes it into a source-independent `Post`; other platforms would add their own source module.
 - `converter` turns a `Post` into EPUB bytes (ebooklib); `delivery` writes it atomically into `<output>/<Publication>/`.
 - `images` replaces remote images with embedded grayscale JPEGs; the pipeline supplies the download function, so all HTTP stays behind `Deps`.

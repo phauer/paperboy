@@ -3,3 +3,16 @@
 # Folder the EPUBs are written to; one subfolder per publication.
 # Share this folder with the Boox via Syncthing.
 output_dir = "~/Books/Newsletters"
+
+# Remembers which posts were processed (optional, this is the default).
+# state_file = "~/Library/Application Support/paperboy/state.db"
+
+# How many of the newest posts to convert when a publication is seen for the first time.
+backfill = 3
+
+[[publications]]
+url = "https://newsletter.pragmaticengineer.com"
+
+# [[publications]]
+# url = "https://example.substack.com"
+# backfill = 10   # overrides the default above

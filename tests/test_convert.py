@@ -101,30 +101,31 @@ def test_unknown_post_reports_not_found(pipeline):
 
 def test_server_error_is_reported(pipeline, substack):
     url = substack.add(make_post_json())
-    substack.status_override = 503
+    substack.errors[substack.api_url("a-fine-post")] = 503
 
     with pytest.raises(SourceError, match="HTTP 503"):
         pipeline.convert(url)
 
 
-def test_cli_convert_prints_path(substack, output_dir, capsys):
+def test_cli_convert_prints_path(substack, write_config, capsys):
     url = substack.add(make_post_json())
 
-    code = main(["convert", url, "--output", str(output_dir)], transport=substack.transport())
+    code = main(["convert", url, "--config", str(write_config())], transport=substack.transport())
 
     assert code == 0
     assert Path(capsys.readouterr().out.strip()).is_file()
 
 
-def test_cli_uses_output_dir_from_config(substack, tmp_path):
+def test_cli_output_option_overrides_config(substack, write_config, tmp_path):
     url = substack.add(make_post_json())
-    config = tmp_path / "config.toml"
-    config.write_text(f'output_dir = "{tmp_path / "from-config"}"\n')
 
-    code = main(["convert", url, "--config", str(config)], transport=substack.transport())
+    code = main(
+        ["convert", url, "--config", str(write_config()), "--output", str(tmp_path / "elsewhere")],
+        transport=substack.transport(),
+    )
 
     assert code == 0
-    assert (tmp_path / "from-config" / "The Example Letter").is_dir()
+    assert (tmp_path / "elsewhere" / "The Example Letter").is_dir()
 
 
 def test_cli_reports_missing_config(substack, tmp_path, capsys):
@@ -135,8 +136,8 @@ def test_cli_reports_missing_config(substack, tmp_path, capsys):
     assert "Config file not found" in capsys.readouterr().err
 
 
-def test_cli_reports_source_errors(substack, output_dir, capsys):
-    code = main(["convert", f"https://{HOST}/p/missing", "--output", str(output_dir)],
+def test_cli_reports_source_errors(substack, write_config, capsys):
+    code = main(["convert", f"https://{HOST}/p/missing", "--config", str(write_config())],
                 transport=substack.transport())
 
     assert code == 1
