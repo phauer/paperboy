@@ -1,6 +1,7 @@
 """Turn Substack posts into EPUBs for e-ink readers."""
 
 import argparse
+import getpass
 import logging
 import sys
 from pathlib import Path
@@ -8,14 +9,20 @@ from pathlib import Path
 import httpx
 
 from paperboy.config import Config, ConfigError, load_config
+from paperboy.macos import KeychainStore, MacNotifier, Notifier, SecretStore
 from paperboy.pipeline import Deps, Pipeline
 from paperboy.state import AlreadyRunning, StateStore
-from paperboy.substack import SourceError
+from paperboy.substack import COOKIE_NAME, AuthExpired, SourceError, normalize_cookie
 
 _USER_AGENT = "paperboy/0.1 (personal e-reader sync)"
 
 
-def main(argv: list[str] | None = None, transport: httpx.BaseTransport | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    transport: httpx.BaseTransport | None = None,
+    secrets: SecretStore | None = None,
+    notifier: Notifier | None = None,
+) -> int:
     args = _parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)  # it logs every request at INFO
@@ -34,7 +41,13 @@ def main(argv: list[str] | None = None, transport: httpx.BaseTransport | None = 
             transport=transport, timeout=30, follow_redirects=True, headers={"User-Agent": _USER_AGENT}
         ) as http:
             output_dir = getattr(args, "output", None) or config.output_dir
-            pipeline = Pipeline(Deps(http=http, output_dir=output_dir, state=state))
+            deps = Deps(
+                http=http, output_dir=output_dir, state=state,
+                secrets=secrets or KeychainStore(), notifier=notifier or MacNotifier(),
+            )
+            pipeline = Pipeline(deps)
+            if args.command == "set-cookie":
+                return _set_cookie(pipeline, deps.secrets)
             return _run(pipeline, config) if args.command == "run" else _convert(pipeline, args.url)
     finally:
         state.close()
@@ -43,7 +56,7 @@ def main(argv: list[str] | None = None, transport: httpx.BaseTransport | None = 
 def _convert(pipeline: Pipeline, url: str) -> int:
     try:
         path = pipeline.convert(url)
-    except SourceError as e:
+    except (SourceError, AuthExpired) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
     print(path)
@@ -58,8 +71,34 @@ def _run(pipeline: Pipeline, config: Config) -> int:
         return 0
     for path in report.converted:
         print(path)
-    print(f"{len(report.converted)} converted, {report.skipped} skipped, {len(report.errors)} errors")
+    print(
+        f"{len(report.converted)} converted, {report.skipped} skipped, "
+        f"{report.pending_auth} waiting for login, {len(report.errors)} errors"
+    )
+    if report.pending_auth:
+        print("Paid posts need a valid Substack cookie: run 'paperboy set-cookie'.")
     return 1 if report.errors else 0
+
+
+def _set_cookie(pipeline: Pipeline, secrets: SecretStore) -> int:
+    # Read from a hidden prompt or stdin, never from argv, so the cookie stays out of shell history.
+    raw = getpass.getpass(f"Paste the {COOKIE_NAME} cookie: ") if sys.stdin.isatty() else sys.stdin.readline()
+    if not raw.strip() and not sys.stdin.isatty():
+        print(
+            "error: no cookie received on stdin. Run this in a terminal for a hidden prompt, "
+            "or copy the cookie and pipe it in: pbpaste | paperboy set-cookie",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        cookie = normalize_cookie(raw)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    secrets.set(COOKIE_NAME, cookie)
+    pipeline.cookie_updated()
+    print("Cookie stored in the Keychain. Waiting paid posts are converted on the next run.")
+    return 0
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -68,6 +107,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="paperboy", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("run", parents=[common], help="convert all new posts of the configured publications")
+    commands.add_parser("set-cookie", parents=[common], help="store the Substack session cookie in the Keychain")
     convert = commands.add_parser("convert", parents=[common], help="convert a single post URL into an EPUB")
     convert.add_argument("url", help="post URL, e.g. https://example.substack.com/p/some-post")
     convert.add_argument("--output", type=Path, help="output folder, overrides output_dir from the config")

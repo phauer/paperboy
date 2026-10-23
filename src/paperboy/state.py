@@ -22,7 +22,13 @@ CREATE TABLE IF NOT EXISTS posts (
     updated_at TEXT NOT NULL,
     PRIMARY KEY (publication, slug)
 );
+CREATE TABLE IF NOT EXISTS flags (
+    name TEXT PRIMARY KEY
+);
 """
+
+# Posts with these statuses are finished and never processed again.
+FINAL_STATUSES = ("done", "skipped")
 
 
 class AlreadyRunning(Exception):
@@ -62,6 +68,12 @@ class StateStore:
         ).fetchone()
         return row[0] if row else None
 
+    def post_urls(self, publication: str, status: str) -> list[str]:
+        rows = self._db.execute(
+            "SELECT url FROM posts WHERE publication = ? AND status = ? ORDER BY updated_at", (publication, status)
+        )
+        return [url for (url,) in rows]
+
     def record_post(
         self, publication: str, slug: str, *, url: str, status: str, at: datetime,
         reason: str | None = None, file: Path | None = None,
@@ -71,3 +83,13 @@ class StateStore:
                 "INSERT OR REPLACE INTO posts VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (publication, slug, url, status, reason, str(file) if file else None, at.isoformat()),
             )
+
+    def has_flag(self, name: str) -> bool:
+        return self._db.execute("SELECT 1 FROM flags WHERE name = ?", (name,)).fetchone() is not None
+
+    def set_flag(self, name: str, on: bool) -> None:
+        with self._db:
+            if on:
+                self._db.execute("INSERT OR IGNORE INTO flags VALUES (?)", (name,))
+            else:
+                self._db.execute("DELETE FROM flags WHERE name = ?", (name,))

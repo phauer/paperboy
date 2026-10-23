@@ -12,10 +12,14 @@ from paperboy.config import Publication
 from paperboy.converter import build_epub
 from paperboy.delivery import deliver
 from paperboy.feed import discover_post_urls
-from paperboy.state import StateStore
-from paperboy.substack import SourceError, fetch_post, parse_post_url
+from paperboy.macos import Notifier, SecretStore
+from paperboy.state import FINAL_STATUSES, StateStore
+from paperboy.substack import COOKIE_NAME, AuthExpired, SourceError, fetch_post, parse_post_url
 
 log = logging.getLogger(__name__)
+
+# Set while the user has been told about an expired cookie, so they're told only once.
+AUTH_EXPIRY_NOTIFIED = "auth_expiry_notified"
 
 
 @dataclass(frozen=True)
@@ -25,6 +29,8 @@ class Deps:
     http: httpx.Client
     output_dir: Path
     state: StateStore
+    secrets: SecretStore
+    notifier: Notifier
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
 
 
@@ -32,6 +38,7 @@ class Deps:
 class RunReport:
     converted: list[Path] = field(default_factory=list)
     skipped: int = 0
+    pending_auth: int = 0
     errors: list[str] = field(default_factory=list)
 
 
@@ -40,8 +47,8 @@ class Pipeline:
         self._deps = deps
 
     def convert(self, url: str) -> Path:
-        """Convert a single post URL into an EPUB in the output folder."""
-        post = fetch_post(self._deps.http, url)
+        """Convert a single post URL into an EPUB in the output folder. Raises AuthExpired."""
+        post = fetch_post(self._deps.http, url, self._deps.secrets.get(COOKIE_NAME))
         return deliver(self._deps.output_dir, post, build_epub(post, self._fetch_image))
 
     def run(self, publications: list[Publication]) -> RunReport:
@@ -60,9 +67,12 @@ class Pipeline:
     def _run_publication(self, publication: Publication, report: RunReport) -> None:
         state, host = self._deps.state, publication.host
         first_sight = not state.knows_publication(host)
-        for position, url in enumerate(discover_post_urls(self._deps.http, host)):
+        urls = discover_post_urls(self._deps.http, host)
+        # Pending posts may have dropped out of the feed while the cookie was expired.
+        urls += [url for url in state.post_urls(host, "pending_auth") if url not in urls]
+        for position, url in enumerate(urls):
             _, slug = parse_post_url(url)
-            if state.post_status(host, slug):
+            if state.post_status(host, slug) in FINAL_STATUSES:
                 continue
             if first_sight and position >= publication.backfill:
                 state.record_post(host, slug, url=url, status="skipped", reason="backfill", at=self._deps.clock())
@@ -70,6 +80,11 @@ class Pipeline:
                 continue
             try:
                 path = self.convert(url)
+            except AuthExpired as e:
+                state.record_post(host, slug, url=url, status="pending_auth", reason=str(e), at=self._deps.clock())
+                report.pending_auth += 1
+                self._notify_auth_expired(str(e))
+                continue
             except SourceError as e:
                 # No state written, so the post is retried on the next run.
                 log.warning("Will retry %s: %s", url, e)
@@ -78,6 +93,20 @@ class Pipeline:
             state.record_post(host, slug, url=url, status="done", file=path, at=self._deps.clock())
             report.converted.append(path)
         state.add_publication(host, self._deps.clock())
+
+    def cookie_updated(self) -> None:
+        """A new cookie was stored: the next expiry deserves a new notification."""
+        self._deps.state.set_flag(AUTH_EXPIRY_NOTIFIED, False)
+
+    def _notify_auth_expired(self, reason: str) -> None:
+        log.warning("Holding paid post until a valid cookie is set: %s", reason)
+        if self._deps.state.has_flag(AUTH_EXPIRY_NOTIFIED):
+            return
+        self._deps.notifier.notify(
+            "paperboy: Substack login needed",
+            "Paid posts are waiting. Copy a fresh substack.sid cookie and run: paperboy set-cookie",
+        )
+        self._deps.state.set_flag(AUTH_EXPIRY_NOTIFIED, True)
 
     def _fetch_image(self, url: str) -> bytes | None:
         try:

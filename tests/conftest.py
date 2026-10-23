@@ -19,12 +19,15 @@ import httpx
 import pytest
 from PIL import Image
 
+from paperboy.cli import main
 from paperboy.pipeline import Deps, Pipeline
 from paperboy.state import StateStore
 
 HOST = "letter.example.com"
 IMAGE_URL = "https://substackcdn.com/image/fetch/x.png"
 NOW = datetime(2026, 4, 1, 12, 0, tzinfo=UTC)
+VALID_COOKIE = "s%3Avalid-session.signature"
+TEASER_BODY = "<p>Teaser paragraph for subscribers.</p>"
 
 FREE_BODY = """\
 <p>Hello readers, this is <strong>Erika Mustermann</strong> with <a href="https://example.org/a">a link</a>.</p>
@@ -70,11 +73,20 @@ class FakeSubstack:
         self.files: dict[str, bytes] = {}
         self.errors: dict[str, int] = {}
         self.requests: list[str] = []
+        self.cookies_sent: list[tuple[str, str]] = []
+        self.full_posts: dict[int, dict] = {}
+        self.valid_cookie: str | None = VALID_COOKIE
 
     def add(self, post_json: dict, host: str = HOST) -> str:
         """Make a post available via the post API and return its URL."""
         url = f"https://{host}/p/{post_json['slug']}"
         self.posts[(host, post_json["slug"])] = {**post_json, "canonical_url": url}
+        return url
+
+    def add_paid(self, post_json: dict, host: str = HOST) -> str:
+        """A paid post: publication hosts serve the teaser, substack.com the full text for a valid cookie."""
+        url = self.add({**post_json, "audience": "only_paid", "body_html": TEASER_BODY}, host)
+        self.full_posts[post_json["id"]] = {**post_json, "audience": "only_paid", "canonical_url": url}
         return url
 
     def publish(self, *post_jsons: dict, host: str = HOST) -> list[str]:
@@ -86,16 +98,30 @@ class FakeSubstack:
     def handler(self, request: httpx.Request) -> httpx.Response:
         url, host, path = str(request.url), request.url.host, request.url.path
         self.requests.append(url)
+        if cookie := request.headers.get("cookie"):
+            self.cookies_sent.append((host, cookie))
         if url in self.errors:
             return httpx.Response(self.errors[url])
         if url in self.files:
             return httpx.Response(200, content=self.files[url])
         if path == "/feed" and host in self.feeds:
             return httpx.Response(200, content=self._feed_xml(host))
+        if host == "substack.com" and path.startswith("/api/v1/posts/by-id/"):
+            return self._full_post(int(path.rsplit("/", 1)[1]), request.headers.get("cookie"))
         slug = path.removeprefix("/api/v1/posts/")
         if path.startswith("/api/v1/posts/") and (host, slug) in self.posts:
             return httpx.Response(200, content=json.dumps(self.posts[(host, slug)]))
         return httpx.Response(404)
+
+    def _full_post(self, post_id: int, cookie: str | None) -> httpx.Response:
+        if post_id not in self.full_posts:
+            return httpx.Response(404)
+        post = self.full_posts[post_id]
+        logged_in = self.valid_cookie and cookie == f"substack.sid={self.valid_cookie}"
+        body = {"post": post if logged_in else {**post, "body_html": TEASER_BODY}, "publication": {"id": 7}}
+        if logged_in:
+            body["subscription"] = {"membership_state": "subscribed"}
+        return httpx.Response(200, content=json.dumps(body))
 
     def _feed_xml(self, host: str) -> str:
         items = "".join(
@@ -124,11 +150,41 @@ def _rfc822(iso: str) -> str:
 def numbered_post(number: int, **overrides) -> dict:
     """Post number N; higher numbers are newer."""
     return make_post_json(
+        id=1000 + number,
         slug=f"post-{number}",
         title=f"Post {number}",
         post_date=f"2026-03-{number:02d}T09:00:00.000Z",
         **overrides,
     )
+
+
+class MemorySecrets:
+    def __init__(self, values: dict[str, str] | None = None):
+        self.values = dict(values or {})
+
+    def get(self, name: str) -> str | None:
+        return self.values.get(name)
+
+    def set(self, name: str, value: str) -> None:
+        self.values[name] = value
+
+
+class RecordingNotifier:
+    def __init__(self):
+        self.messages: list[tuple[str, str]] = []
+
+    def notify(self, title: str, message: str) -> None:
+        self.messages.append((title, message))
+
+
+@pytest.fixture
+def secrets() -> MemorySecrets:
+    return MemorySecrets({"substack.sid": VALID_COOKIE})
+
+
+@pytest.fixture
+def notifier() -> RecordingNotifier:
+    return RecordingNotifier()
 
 
 @pytest.fixture
@@ -154,9 +210,21 @@ def state(state_file: Path):
 
 
 @pytest.fixture
-def pipeline(substack: FakeSubstack, output_dir: Path, state: StateStore):
+def pipeline(substack, output_dir, state, secrets, notifier):
     with httpx.Client(transport=substack.transport()) as http:
-        yield Pipeline(Deps(http=http, output_dir=output_dir, state=state, clock=lambda: NOW))
+        yield Pipeline(
+            Deps(http=http, output_dir=output_dir, state=state, secrets=secrets, notifier=notifier, clock=lambda: NOW)
+        )
+
+
+@pytest.fixture
+def cli(substack, secrets, notifier):
+    """Run the CLI against the fakes; never touches the real Keychain or notifications."""
+
+    def run(*argv: str) -> int:
+        return main(list(argv), transport=substack.transport(), secrets=secrets, notifier=notifier)
+
+    return run
 
 
 @pytest.fixture

@@ -1,7 +1,6 @@
 import pytest
 
 from conftest import HOST, numbered_post
-from paperboy.cli import main
 from paperboy.config import Publication
 from paperboy.state import AlreadyRunning
 
@@ -155,36 +154,36 @@ def test_concurrent_run_is_refused(pipeline, substack, state, output_dir):
     assert _files(output_dir) == []
 
 
-def test_cli_run_converts_and_summarizes(substack, write_config, capsys):
+def test_cli_run_converts_and_summarizes(cli, substack, write_config, capsys):
     substack.publish(numbered_post(2), numbered_post(1))
     config = write_config(f'backfill = 1\n\n[[publications]]\nurl = "https://{HOST}"\n')
 
-    code = main(["run", "--config", str(config)], transport=substack.transport())
+    code = cli("run", "--config", str(config))
 
     assert code == 0
-    assert "1 converted, 1 skipped, 0 errors" in capsys.readouterr().out
+    assert "1 converted, 1 skipped, 0 waiting for login, 0 errors" in capsys.readouterr().out
 
 
-def test_cli_run_with_per_publication_backfill(substack, write_config, output_dir):
+def test_cli_run_with_per_publication_backfill(cli, substack, write_config, output_dir):
     substack.publish(numbered_post(2), numbered_post(1))
     config = write_config(f'[[publications]]\nurl = "{HOST}"\nbackfill = 0\n')
 
-    assert main(["run", "--config", str(config)], transport=substack.transport()) == 0
+    assert cli("run", "--config", str(config)) == 0
     assert _files(output_dir) == []
 
 
-def test_cli_run_exits_nonzero_on_errors(substack, write_config):
+def test_cli_run_exits_nonzero_on_errors(cli, substack, write_config):
     substack.errors[f"https://{HOST}/feed"] = 500
     config = write_config(f'[[publications]]\nurl = "https://{HOST}"\n')
 
-    assert main(["run", "--config", str(config)], transport=substack.transport()) == 1
+    assert cli("run", "--config", str(config)) == 1
 
 
-def test_cli_run_reports_concurrent_run(substack, write_config, state, capsys):
+def test_cli_run_reports_concurrent_run(cli, substack, write_config, state, capsys):
     config = write_config(f'[[publications]]\nurl = "https://{HOST}"\n')
 
     with state.lock():
-        code = main(["run", "--config", str(config)], transport=substack.transport())
+        code = cli("run", "--config", str(config))
 
     assert code == 0
     assert "Another run is in progress" in capsys.readouterr().out
@@ -203,8 +202,8 @@ def test_cli_run_reports_concurrent_run(substack, write_config, state, capsys):
         ("this is not toml", "Invalid TOML"),
     ],
 )
-def test_cli_run_reports_config_errors(substack, write_config, capsys, toml, message):
-    code = main(["run", "--config", str(write_config(toml))], transport=substack.transport())
+def test_cli_run_reports_config_errors(cli, substack, write_config, capsys, toml, message):
+    code = cli("run", "--config", str(write_config(toml)))
 
     assert code == 2
     assert message in capsys.readouterr().err

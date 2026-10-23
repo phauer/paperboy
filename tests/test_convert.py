@@ -3,7 +3,6 @@ from pathlib import Path
 import pytest
 
 from conftest import HOST, assert_epubcheck_clean, make_post_json, read_epub
-from paperboy.cli import main
 from paperboy.substack import SourceError
 
 
@@ -107,38 +106,33 @@ def test_server_error_is_reported(pipeline, substack):
         pipeline.convert(url)
 
 
-def test_cli_convert_prints_path(substack, write_config, capsys):
+def test_cli_convert_prints_path(cli, substack, write_config, capsys):
     url = substack.add(make_post_json())
 
-    code = main(["convert", url, "--config", str(write_config())], transport=substack.transport())
+    code = cli("convert", url, "--config", str(write_config()))
 
     assert code == 0
     assert Path(capsys.readouterr().out.strip()).is_file()
 
 
-def test_cli_output_option_overrides_config(substack, write_config, tmp_path):
+def test_cli_output_option_overrides_config(cli, substack, write_config, tmp_path):
     url = substack.add(make_post_json())
 
-    code = main(
-        ["convert", url, "--config", str(write_config()), "--output", str(tmp_path / "elsewhere")],
-        transport=substack.transport(),
-    )
+    code = cli("convert", url, "--config", str(write_config()), "--output", str(tmp_path / "elsewhere"))
 
     assert code == 0
     assert (tmp_path / "elsewhere" / "The Example Letter").is_dir()
 
 
-def test_cli_reports_missing_config(substack, tmp_path, capsys):
-    code = main(["convert", "https://x.example.com/p/y", "--config", str(tmp_path / "nope.toml")],
-                transport=substack.transport())
+def test_cli_reports_missing_config(cli, substack, tmp_path, capsys):
+    code = cli("convert", "https://x.example.com/p/y", "--config", str(tmp_path / "nope.toml"))
 
     assert code == 2
     assert "Config file not found" in capsys.readouterr().err
 
 
-def test_cli_reports_source_errors(substack, write_config, capsys):
-    code = main(["convert", f"https://{HOST}/p/missing", "--config", str(write_config())],
-                transport=substack.transport())
+def test_cli_reports_source_errors(cli, substack, write_config, capsys):
+    code = cli("convert", f"https://{HOST}/p/missing", "--config", str(write_config()))
 
     assert code == 1
     assert "Post not found" in capsys.readouterr().err

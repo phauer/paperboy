@@ -5,8 +5,8 @@ Turns Substack posts into clean EPUBs for e-ink readers like the Boox Go 7.
 ## Status
 
 Early work in progress.
-Today it converts new free posts of the configured publications, including their images.
-Paid posts, covers and automatic syncing follow (see `.scratch/paperboy/`).
+Today it converts new free and paid posts of the configured publications, including their images.
+Covers, body cleanup and automatic syncing follow (see `.scratch/paperboy/`).
 
 ## Setup
 
@@ -17,11 +17,29 @@ uv sync
 cp config.example.toml config.toml   # then set output_dir and your publications
 ```
 
+## Paid Posts
+
+Paid posts need your Substack login cookie.
+Copy it once from your browser and store it in the macOS Keychain:
+
+1. Log in at [substack.com](https://substack.com) in your browser.
+2. Open the developer tools (Chrome: `⌥⌘I`) → **Application** → **Cookies** → `https://substack.com`.
+3. Copy the value of `substack.sid`.
+4. Run `uv run paperboy set-cookie` in a terminal and paste it (input stays hidden).
+   Without an interactive terminal, pipe it in from the clipboard instead: `pbpaste | uv run paperboy set-cookie`.
+
+The cookie is sent only to `substack.com`, never stored in files or logs, and only read from the Keychain.
+macOS may ask once whether Python may access the Keychain item; choose **Always Allow** so scheduled runs work.
+
+When the cookie expires, paid posts are held back instead of delivered as teasers.
+You get one macOS notification; after `set-cookie` with a fresh cookie, the next run delivers all waiting posts.
+
 ## Usage
 
 ```sh
 uv run paperboy run                                    # all new posts of the configured publications
 uv run paperboy convert https://<publication>/p/<slug>  # one specific post
+uv run paperboy set-cookie                             # store the Substack cookie
 ```
 
 EPUBs land in `<output_dir>/<Publication>/YYYY-MM-DD <Title>.epub`.
