@@ -25,6 +25,7 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
   A teaser (body far shorter than `wordcount`) raises `AuthExpired`; the pipeline records the post as `pending_auth` and retries it every run.
 - `macos` holds the Keychain secret store and the notifier; tests replace both with in-memory fakes (the `cli` test fixture always injects them).
 - `converter` turns a `Post` into EPUB bytes (ebooklib); `delivery` writes it atomically into `<output>/<Publication>/`.
+- `cleanup` removes Substack clutter before images are fetched (`remove_clutter`) and strips leftovers, empty wrappers and tracking afterwards (`tidy`).
 - `images` replaces remote images with embedded grayscale JPEGs; the pipeline supplies the download function, so all HTTP stays behind `Deps`.
 
 ## Conventions

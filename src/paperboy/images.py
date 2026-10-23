@@ -15,6 +15,8 @@ log = logging.getLogger(__name__)
 MAX_SIZE = (1264, 1680)
 JPEG_QUALITY = 80
 CONTRAST = 1.2
+# Images this small in both dimensions are tracking pixels or spacers.
+_MIN_SIZE = 3
 
 FetchImage = Callable[[str], bytes | None]
 
@@ -54,9 +56,11 @@ def _download(url: str, fetch: FetchImage, file_name: str) -> EmbeddedImage | No
 
 
 def process_image(data: bytes) -> bytes | None:
-    """Grayscale, slight contrast boost, fit to the screen, JPEG. None if undecodable."""
+    """Grayscale, slight contrast boost, fit to the screen, JPEG. None if undecodable or a tracking pixel."""
     try:
         with Image.open(io.BytesIO(data)) as original:
+            if max(original.size) < _MIN_SIZE:
+                return None
             image = _on_white(original).convert("L")
             image = ImageEnhance.Contrast(image).enhance(CONTRAST)
             image.thumbnail(MAX_SIZE, Image.Resampling.LANCZOS)

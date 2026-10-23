@@ -1,34 +1,35 @@
 """Converts a Post into EPUB bytes."""
 
 import io
+from dataclasses import dataclass
 from html import escape
 
 from ebooklib import epub
 from lxml import etree, html
 
+from paperboy.cleanup import remove_clutter, tidy
 from paperboy.images import EmbeddedImage, FetchImage, embed_images
 from paperboy.post import Post
-
-# Elements that are interactive, decorative or reference remote resources.
-# Remote resources are not allowed in an EPUB, so images that could not be
-# embedded are dropped, too.
-_DROPPED_TAGS = (
-    "script", "style", "noscript", "svg", "button", "form", "input",
-    "iframe", "picture", "source", "img", "video", "audio",
-)
 
 # Minimal on purpose: the reader's own typography settings stay in control.
 _CSS = """\
 img { max-width: 100%; height: auto; }
 figure { margin: 1em 0; }
-pre { white-space: pre-wrap; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .subtitle { font-style: italic; }
 .source { font-size: 0.9em; }
 """
 
 
+@dataclass(frozen=True)
+class Heading:
+    level: int
+    text: str
+    anchor: str
+
+
 def build_epub(post: Post, fetch_image: FetchImage) -> bytes:
-    body_html, images = _prepare_body(post, fetch_image)
+    body_html, images, headings = _prepare_body(post, fetch_image)
     book = epub.EpubBook()
     book.set_identifier(post.url)
     book.set_title(post.title)
@@ -50,7 +51,7 @@ def build_epub(post: Post, fetch_image: FetchImage) -> bytes:
             epub.EpubImage(uid=f"image-{number}", file_name=image.file_name, media_type="image/jpeg", content=image.data)
         )
 
-    book.toc = [epub.Link("content.xhtml", post.title, "content")]
+    book.toc = _toc(post, headings)
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
     book.spine = [title_page, content]
@@ -85,27 +86,43 @@ def _content_html(post: Post, body_html: str) -> str:
     )
 
 
-def _prepare_body(post: Post, fetch_image: FetchImage) -> tuple[str, list[EmbeddedImage]]:
-    """Embed images and strip everything an EPUB can't or shouldn't contain."""
+def _prepare_body(post: Post, fetch_image: FetchImage) -> tuple[str, list[EmbeddedImage], list[Heading]]:
+    """Clean the body, embed its images and collect its headings."""
     if not post.body_html.strip():
-        return "", []
+        return "", [], []
     root = html.fragment_fromstring(post.body_html, create_parent="div")
+    remove_clutter(root)  # first, so images of removed widgets aren't downloaded
     images = embed_images(root, post.url, fetch_image)
-    # Dropping while iterating would skip elements, so take one match at a time.
-    while (leftover := next(_droppable(root), None)) is not None:
-        leftover.drop_tree()
+    tidy(root)
+    headings = _anchor_headings(root)
     inner = escape(root.text or "", quote=False)
     inner += "".join(etree.tostring(child, encoding="unicode", method="html") for child in root)
-    return inner, images
+    return inner, images, headings
 
 
-def _droppable(root: html.HtmlElement):
-    return (
-        element
-        for element in root.iter(*_DROPPED_TAGS)
-        if not (element.tag == "img" and not _is_remote(element.get("src")))
-    )
+def _anchor_headings(root: html.HtmlElement) -> list[Heading]:
+    """Give section headings ids, so the EPUB navigation can jump to them."""
+    headings = []
+    for element in root.iter("h1", "h2", "h3"):
+        text = " ".join(element.text_content().split())
+        if not text:
+            continue
+        anchor = element.get("id") or f"section-{len(headings) + 1}"
+        element.set("id", anchor)
+        headings.append(Heading(level=1 if element.tag in ("h1", "h2") else 2, text=text, anchor=anchor))
+    return headings
 
 
-def _is_remote(src: str | None) -> bool:
-    return not src or "://" in src or src.startswith(("//", "data:"))
+def _toc(post: Post, headings: list[Heading]) -> list:
+    """The post, followed by its sections; h3 nest under the preceding h1/h2."""
+    toc: list = [epub.Link("content.xhtml", post.title, "content")]
+    for heading in headings:
+        link = epub.Link(f"content.xhtml#{heading.anchor}", heading.text, heading.anchor)
+        parent = toc[-1]
+        if heading.level == 1 or len(toc) == 1:
+            toc.append(link)
+        elif isinstance(parent, epub.Link):
+            toc[-1] = (epub.Section(parent.title, parent.href), [link])
+        else:
+            parent[1].append(link)
+    return toc

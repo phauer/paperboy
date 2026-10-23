@@ -6,7 +6,7 @@ Turns Substack posts into clean EPUBs for e-ink readers like the Boox Go 7.
 
 Early work in progress.
 Today it converts new free and paid posts of the configured publications, including their images.
-Covers, body cleanup and automatic syncing follow (see `.scratch/paperboy/`).
+Covers and automatic syncing follow (see `.scratch/paperboy/`).
 
 ## Setup
 
@@ -53,6 +53,10 @@ Only one `run` can be active at a time.
 `run` exits with code 1 if any errors occurred, so schedulers can flag them.
 
 Each EPUB has a title page (title, subtitle, author, publication, date), the post body and a link to the original at the end.
+The body is cleaned up for reading: subscribe and share prompts, comment buttons, the paywall marker and app banners are removed.
+Buttons that lead somewhere meaningful (e.g. to a book) stay as plain links; YouTube videos, tweets and embedded posts become links or quotes.
+Tracking parameters are stripped from links, footnotes link both ways, code blocks wrap, and section headings appear in the reader's table of contents.
+
 Images are embedded for offline reading and optimized for a monochrome e-ink screen.
 They are converted to grayscale with a slight contrast boost, fitted to the Boox Go 7 screen (1264×1680) and stored as JPEG.
 An image that can't be downloaded or decoded is left out; its caption and the rest of the post stay.
