@@ -21,6 +21,7 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
 - `Pipeline` is the single entry point for the CLI and the tests; all I/O (HTTP client, output folder) comes in via `Deps`.
 - `substack` fetches a post and normalizes it into a source-independent `Post`; other platforms would add their own source module.
 - `converter` turns a `Post` into EPUB bytes (ebooklib); `delivery` writes it atomically into `<output>/<Publication>/`.
+- `images` replaces remote images with embedded grayscale JPEGs; the pipeline supplies the download function, so all HTTP stays behind `Deps`.
 
 ## Conventions
 

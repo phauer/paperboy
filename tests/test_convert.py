@@ -49,12 +49,12 @@ def test_epub_metadata(pipeline, substack):
     assert "<dc:language>de</dc:language>" in opf
 
 
-def test_remote_resources_and_widgets_are_removed_but_captions_kept(pipeline, substack):
+def test_widgets_are_removed_but_captions_kept(pipeline, substack):
     url = substack.add(make_post_json())
 
     content = read_epub(pipeline.convert(url))["EPUB/content.xhtml"]
 
-    for tag in ("<img", "<picture", "<source", "<svg", "<button"):
+    for tag in ("<picture", "<source", "<svg", "<button"):
         assert tag not in content
     assert "Source: Max Mustermann" in content
 

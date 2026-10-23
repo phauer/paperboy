@@ -4,18 +4,23 @@ Fixture posts are anonymized and made up, but mirror the structure of real
 Substack API responses (bylines, captioned images, buttons, subscribe widgets).
 """
 
+import io
 import json
+import os
 import shutil
 import subprocess
+import tempfile
 import zipfile
 from pathlib import Path
 
 import httpx
 import pytest
+from PIL import Image
 
 from paperboy.pipeline import Deps, Pipeline
 
 HOST = "letter.example.com"
+IMAGE_URL = "https://substackcdn.com/image/fetch/x.png"
 
 FREE_BODY = """\
 <p>Hello readers, this is <strong>Erika Mustermann</strong> with <a href="https://example.org/a">a link</a>.</p>
@@ -53,10 +58,12 @@ def make_post_json(**overrides) -> dict:
 
 
 class FakeSubstack:
-    """Serves post JSON by slug, like the Substack post API."""
+    """Serves post JSON by slug, like the Substack post API, plus image files by URL."""
 
     def __init__(self):
         self.posts: dict[str, dict] = {}
+        self.files: dict[str, bytes] = {}
+        self.requests: list[str] = []
         self.status_override: int | None = None
 
     def add(self, post_json: dict) -> str:
@@ -64,6 +71,9 @@ class FakeSubstack:
         return f"https://{HOST}/p/{post_json['slug']}"
 
     def handler(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(str(request.url))
+        if str(request.url) in self.files:
+            return httpx.Response(200, content=self.files[str(request.url)])
         if self.status_override:
             return httpx.Response(self.status_override)
         prefix = "/api/v1/posts/"
@@ -92,6 +102,17 @@ def pipeline(substack: FakeSubstack, output_dir: Path):
         yield Pipeline(Deps(http=http, output_dir=output_dir))
 
 
+def make_image(size=(3000, 1000), mode="RGB", color=(200, 30, 30), format="PNG") -> bytes:
+    out = io.BytesIO()
+    Image.new(mode, size, color).save(out, format=format)
+    return out.getvalue()
+
+
+def read_epub_bytes(path: Path) -> dict[str, bytes]:
+    with zipfile.ZipFile(path) as z:
+        return {name: z.read(name) for name in z.namelist()}
+
+
 def read_epub(path: Path) -> dict[str, str]:
     with zipfile.ZipFile(path) as z:
         return {name: z.read(name).decode("utf-8", errors="replace") for name in z.namelist()}
@@ -101,5 +122,9 @@ def assert_epubcheck_clean(path: Path) -> None:
     epubcheck = shutil.which("epubcheck")
     if not epubcheck:
         pytest.skip("epubcheck not installed (brew install epubcheck)")
-    result = subprocess.run([epubcheck, str(path)], capture_output=True, text=True)
+    # Java's image reader writes cache files to java.io.tmpdir; point it at Python's
+    # temp dir, which also works in sandboxes that block the system default.
+    java_options = f"{os.environ.get('JAVA_TOOL_OPTIONS', '')} -Djava.io.tmpdir={tempfile.gettempdir()}"
+    env = {**os.environ, "JAVA_TOOL_OPTIONS": java_options.strip()}
+    result = subprocess.run([epubcheck, str(path)], capture_output=True, text=True, env=env)
     assert result.returncode == 0, result.stdout + result.stderr

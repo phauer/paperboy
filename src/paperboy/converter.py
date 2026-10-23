@@ -6,10 +6,12 @@ from html import escape
 from ebooklib import epub
 from lxml import etree, html
 
+from paperboy.images import EmbeddedImage, FetchImage, embed_images
 from paperboy.post import Post
 
 # Elements that are interactive, decorative or reference remote resources.
-# Remote resources are not allowed in an EPUB; images get embedded separately.
+# Remote resources are not allowed in an EPUB, so images that could not be
+# embedded are dropped, too.
 _DROPPED_TAGS = (
     "script", "style", "noscript", "svg", "button", "form", "input",
     "iframe", "picture", "source", "img", "video", "audio",
@@ -17,14 +19,16 @@ _DROPPED_TAGS = (
 
 # Minimal on purpose: the reader's own typography settings stay in control.
 _CSS = """\
-img { max-width: 100%; }
+img { max-width: 100%; height: auto; }
+figure { margin: 1em 0; }
 pre { white-space: pre-wrap; }
 .subtitle { font-style: italic; }
 .source { font-size: 0.9em; }
 """
 
 
-def build_epub(post: Post) -> bytes:
+def build_epub(post: Post, fetch_image: FetchImage) -> bytes:
+    body_html, images = _prepare_body(post, fetch_image)
     book = epub.EpubBook()
     book.set_identifier(post.url)
     book.set_title(post.title)
@@ -38,9 +42,13 @@ def build_epub(post: Post) -> bytes:
     book.add_item(css)
 
     title_page = _chapter("Title", "title.xhtml", post.language, _title_page_html(post), css)
-    content = _chapter(post.title, "content.xhtml", post.language, _content_html(post), css)
+    content = _chapter(post.title, "content.xhtml", post.language, _content_html(post, body_html), css)
     for chapter in (title_page, content):
         book.add_item(chapter)
+    for number, image in enumerate(images, start=1):
+        book.add_item(
+            epub.EpubImage(uid=f"image-{number}", file_name=image.file_name, media_type="image/jpeg", content=image.data)
+        )
 
     book.toc = [epub.Link("content.xhtml", post.title, "content")]
     book.add_item(epub.EpubNcx())
@@ -69,22 +77,35 @@ def _title_page_html(post: Post) -> str:
     return "\n".join(lines)
 
 
-def _content_html(post: Post) -> str:
+def _content_html(post: Post, body_html: str) -> str:
     url = escape(post.url)
     return (
-        f"{sanitize_body(post.body_html)}\n"
+        f"{body_html}\n"
         f'<hr/>\n<p class="source">Original: <a href="{url}">{url}</a></p>'
     )
 
 
-def sanitize_body(body_html: str) -> str:
-    """Strip everything an EPUB can't or shouldn't contain."""
-    if not body_html.strip():
-        return ""
-    root = html.fragment_fromstring(body_html, create_parent="div")
+def _prepare_body(post: Post, fetch_image: FetchImage) -> tuple[str, list[EmbeddedImage]]:
+    """Embed images and strip everything an EPUB can't or shouldn't contain."""
+    if not post.body_html.strip():
+        return "", []
+    root = html.fragment_fromstring(post.body_html, create_parent="div")
+    images = embed_images(root, post.url, fetch_image)
     # Dropping while iterating would skip elements, so take one match at a time.
-    while (leftover := next(root.iter(*_DROPPED_TAGS), None)) is not None:
+    while (leftover := next(_droppable(root), None)) is not None:
         leftover.drop_tree()
     inner = escape(root.text or "", quote=False)
     inner += "".join(etree.tostring(child, encoding="unicode", method="html") for child in root)
-    return inner
+    return inner, images
+
+
+def _droppable(root: html.HtmlElement):
+    return (
+        element
+        for element in root.iter(*_DROPPED_TAGS)
+        if not (element.tag == "img" and not _is_remote(element.get("src")))
+    )
+
+
+def _is_remote(src: str | None) -> bool:
+    return not src or "://" in src or src.startswith(("//", "data:"))
