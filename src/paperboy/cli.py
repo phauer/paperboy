@@ -10,6 +10,7 @@ import httpx
 
 from paperboy.config import Config, ConfigError, load_config
 from paperboy.macos import KeychainStore, MacNotifier, Notifier, SecretStore
+from paperboy import schedule
 from paperboy.pipeline import Deps, Pipeline
 from paperboy.state import AlreadyRunning, StateStore
 from paperboy.substack import COOKIE_NAME, AuthExpired, SourceError, normalize_cookie
@@ -26,6 +27,8 @@ def main(
     args = _parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)  # it logs every request at INFO
+    if args.command == "schedule":
+        return _schedule(args.action, args.config)
     try:
         config = load_config(args.config)
     except ConfigError as e:
@@ -64,6 +67,7 @@ def _convert(pipeline: Pipeline, url: str) -> int:
 
 
 def _run(pipeline: Pipeline, config: Config) -> int:
+    logging.info("Run started for %d publications", len(config.publications))
     try:
         report = pipeline.run(config.publications)
     except AlreadyRunning:
@@ -101,6 +105,26 @@ def _set_cookie(pipeline: Pipeline, secrets: SecretStore) -> int:
     return 0
 
 
+def _schedule(action: str, config: Path) -> int:
+    if action == "show":
+        sys.stdout.write(schedule.render_plist(config).decode())
+        return 0
+    if action == "uninstall":
+        removed = schedule.uninstall()
+        print("Hourly run removed." if removed else "No hourly run was installed.")
+        return 0
+    try:
+        if not load_config(config).publications:  # fail now, not silently every hour
+            raise ConfigError(f"no [[publications]] configured in {config}")
+        plist = schedule.install(config)
+    except (ConfigError, schedule.ScheduleError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    print(f"Hourly run installed ({plist}); it also runs right now and after the Mac wakes.")
+    print(f"Log: {schedule.LOG_FILE}")
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--config", type=Path, default=Path("config.toml"), help="config file (default: ./config.toml)")
@@ -108,6 +132,8 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("run", parents=[common], help="convert all new posts of the configured publications")
     commands.add_parser("set-cookie", parents=[common], help="store the Substack session cookie in the Keychain")
+    scheduling = commands.add_parser("schedule", parents=[common], help="run every hour via launchd")
+    scheduling.add_argument("action", choices=["install", "uninstall", "show"])
     convert = commands.add_parser("convert", parents=[common], help="convert a single post URL into an EPUB")
     convert.add_argument("url", help="post URL, e.g. https://example.substack.com/p/some-post")
     convert.add_argument("--output", type=Path, help="output folder, overrides output_dir from the config")

@@ -5,8 +5,8 @@ Turns Substack posts into clean EPUBs for e-ink readers like the Boox Go 7.
 ## Status
 
 Early work in progress.
-Today it converts new free and paid posts of the configured publications, including their images.
-Automatic syncing to the Boox follows (see `.scratch/paperboy/`).
+It converts new free and paid posts of the configured publications every hour and syncs them to the Boox via Syncthing.
+Open work is tracked in `.scratch/paperboy/`.
 
 ## Setup
 
@@ -40,6 +40,7 @@ You get one macOS notification; after `set-cookie` with a fresh cookie, the next
 uv run paperboy run                                    # all new posts of the configured publications
 uv run paperboy convert https://<publication>/p/<slug>  # one specific post
 uv run paperboy set-cookie                             # store the Substack cookie
+uv run paperboy schedule install                       # run every hour (see below)
 ```
 
 EPUBs land in `<output_dir>/<Publication>/YYYY-MM-DD <Title>.epub`.
@@ -62,6 +63,53 @@ Tracking parameters are stripped from links, footnotes link both ways, code bloc
 Images are embedded for offline reading and optimized for a monochrome e-ink screen.
 They are converted to grayscale with a slight contrast boost, fitted to the Boox Go 7 screen (1264×1680) and stored as JPEG.
 An image that can't be downloaded or decoded is left out; its caption and the rest of the post stay.
+
+## Automatic Delivery to the Boox
+
+The Mac converts new posts every hour into `output_dir`; Syncthing carries them to the Boox library.
+Delivery happens whenever the Mac is awake and the Boox is on Wi-Fi.
+
+### 1. Choose the Output Folder
+
+Set `output_dir` in `config.toml` to the folder you want to sync, e.g. `~/Books/Newsletters`, and add your `[[publications]]`.
+Run `uv run paperboy run` once to check that issues appear there.
+
+### 2. Syncthing on the Mac
+
+```sh
+brew install syncthing
+brew services start syncthing   # starts now and at every login
+```
+
+Open the web UI at <http://127.0.0.1:8384>.
+
+### 3. Syncthing on the Boox
+
+1. Install **Syncthing-Fork** from Google Play (or F-Droid) and grant it access to all files.
+2. Allow it to run in the background: in the BOOX app management settings, turn off freezing for Syncthing-Fork, and exempt it from battery optimization.
+   Without this, the Boox stops Syncthing as soon as the screen locks.
+3. In Syncthing-Fork's settings, check the run conditions (e.g. Wi-Fi only) match how you use the device.
+
+### 4. Pair the Devices and Share the Folder
+
+1. In the Mac web UI, choose **Add Remote Device** and scan or paste the Boox's device ID (shown in Syncthing-Fork).
+2. Choose **Add Folder** on the Mac: folder path = your `output_dir`, folder type **Send Only**, and share it with the Boox.
+3. Accept the share on the Boox: folder path `/storage/emulated/0/Books/Newsletters`, folder type **Receive Only**.
+
+New issues then appear in NeoReader's library under `Books/Newsletters/<Publication>/`.
+Issues you delete on the Boox stay deleted; the Mac never recreates processed posts.
+
+### 5. Run Every Hour
+
+```sh
+uv run paperboy schedule install    # installs a launchd job and runs it right away
+uv run paperboy schedule show       # prints the job definition
+uv run paperboy schedule uninstall  # removes it again
+```
+
+The job runs at the start of every hour, and right after the Mac wakes if it slept through a run.
+It uses the config file you pass (default `./config.toml`) with an absolute path, so keep the project where it is.
+Output and errors go to `~/Library/Logs/paperboy/paperboy.log`.
 
 ## Development
 

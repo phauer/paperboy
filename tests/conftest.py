@@ -19,6 +19,7 @@ import httpx
 import pytest
 from PIL import Image
 
+from paperboy import schedule
 from paperboy.cli import main
 from paperboy.pipeline import Deps, Pipeline
 from paperboy.state import StateStore
@@ -156,6 +157,27 @@ def numbered_post(number: int, **overrides) -> dict:
         post_date=f"2026-03-{number:02d}T09:00:00.000Z",
         **overrides,
     )
+
+
+class FakeLaunchctl:
+    def __init__(self):
+        self.calls: list[list[str]] = []
+        self.fail_bootstrap = False
+
+    def __call__(self, command: list[str]) -> subprocess.CompletedProcess:
+        self.calls.append(command)
+        failed = self.fail_bootstrap and command[1] == "bootstrap"
+        return subprocess.CompletedProcess(command, 1 if failed else 0, "", "Bootstrap failed: 5" if failed else "")
+
+
+@pytest.fixture(autouse=True)
+def launchd(tmp_path, monkeypatch) -> FakeLaunchctl:
+    """Never touch the real LaunchAgents folder, log folder or launchctl in tests."""
+    fake = FakeLaunchctl()
+    monkeypatch.setattr(schedule, "LAUNCH_AGENTS", tmp_path / "LaunchAgents")
+    monkeypatch.setattr(schedule, "LOG_FILE", tmp_path / "Logs" / "paperboy.log")
+    monkeypatch.setattr(schedule, "_launchctl", fake)
+    return fake
 
 
 class MemorySecrets:

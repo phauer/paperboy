@@ -27,6 +27,7 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
 - `converter` turns a `Post` into EPUB bytes (ebooklib); `delivery` writes it atomically into `<output>/<Publication>/`.
 - `cleanup` removes Substack clutter before images are fetched (`remove_clutter`) and strips leftovers, empty wrappers and tracking afterwards (`tidy`).
 - `cover` renders the typographic cover (Helvetica Neue on macOS, Pillow's bundled font elsewhere); `converter` also sets the series metadata (EPUB 3 collection and Calibre).
+- `schedule` renders and (un)installs the launchd user agent; tests redirect its paths and `launchctl` via an autouse fixture, so they never touch the real system.
 - `images` replaces remote images with embedded grayscale JPEGs; the pipeline supplies the download function, so all HTTP stays behind `Deps`.
 
 ## Conventions
