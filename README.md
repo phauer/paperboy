@@ -6,7 +6,15 @@ Turns Substack posts into clean EPUBs for e-ink readers like the Boox Go 7.
 
 Early work in progress.
 It converts new free and paid posts of the configured publications every hour and pushes them to the Boox via BOOX Drop.
-Open work is tracked in `.scratch/paperboy/`.
+
+## Disclaimer
+
+paperboy is a personal tool and not affiliated with or endorsed by Substack.
+It reads what you can already read: free posts, and paid posts of publications you subscribe to, using your own login cookie.
+The cookie stays in your macOS Keychain and is only ever sent to Substack.
+The EPUBs are meant for your own reading, so please don't share them and keep supporting the authors you read.
+You are responsible for using the tool in line with Substack's terms; it checks each feed once per hour.
+It is released under the [MIT License](LICENSE), without any warranty.
 
 ## Setup
 

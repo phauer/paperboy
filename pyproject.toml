@@ -1,8 +1,10 @@
 [project]
 name = "paperboy"
 version = "0.1.0"
-description = "Add your description here"
+description = "Turns Substack posts into clean EPUBs for e-ink readers and pushes them to a Boox"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Philipp Hauer" }
 ]
