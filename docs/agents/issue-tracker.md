@@ -1,6 +1,7 @@
 # Issue tracker: Local Markdown
 
 Issues and specs (you may know a spec as a PRD) for this repo live as markdown files in `.scratch/`.
+The folder is gitignored (local only), so tickets are not versioned or pushed; keep it in your normal backup.
 
 ## Conventions
 
