@@ -19,7 +19,8 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
 ## Architecture
 
 - `Pipeline` is the single entry point for the CLI and the tests (`run` for feeds, `convert` for one post); all I/O (HTTP client, output folder, state store, secrets, notifier, clock) comes in via `Deps`.
-- `feed` discovers post URLs from a publication's RSS feed; `state` (SQLite) records processed posts and known publications and holds the run lock.
+- `feed` discovers post URLs from a publication's RSS feed; `state` (SQLite) records processed posts, known publications and the last run, and holds the run lock.
+  `Pipeline.status` reads it (plus whether a cookie is stored) for the `status` command.
 - `substack` fetches a post and normalizes it into a source-independent `Post`; other platforms would add their own source module.
   Paid posts (`audience` ≠ `everyone`) get their full text from `substack.com/api/v1/posts/by-id/<id>` with the cookie, because the cookie doesn't apply on publication hosts.
   A teaser (body far shorter than `wordcount`) raises `AuthExpired`; the pipeline records the post as `pending_auth` and retries it every run.

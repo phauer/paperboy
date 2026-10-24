@@ -1,9 +1,11 @@
 """Remembers which posts were processed, so runs are idempotent."""
 
 import fcntl
+import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -30,6 +32,11 @@ CREATE TABLE IF NOT EXISTS pushes (
     size INTEGER NOT NULL,
     pushed_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS last_run (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    finished_at TEXT NOT NULL,
+    errors TEXT NOT NULL
+);
 """
 
 # Posts with these statuses are finished and never processed again.
@@ -38,6 +45,21 @@ FINAL_STATUSES = ("done", "skipped")
 
 class AlreadyRunning(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class StoredPost:
+    publication: str
+    url: str
+    status: str
+    reason: str | None
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class LastRun:
+    finished_at: datetime
+    errors: list[str]
 
 
 class StateStore:
@@ -88,6 +110,23 @@ class StateStore:
                 "INSERT OR REPLACE INTO posts VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (publication, slug, url, status, reason, str(file) if file else None, at.isoformat()),
             )
+
+    def posts(self) -> list[StoredPost]:
+        rows = self._db.execute(
+            "SELECT publication, url, status, reason, updated_at FROM posts ORDER BY publication, updated_at, slug"
+        )
+        return [
+            StoredPost(publication, url, status, reason, datetime.fromisoformat(updated_at))
+            for publication, url, status, reason, updated_at in rows
+        ]
+
+    def record_run(self, at: datetime, errors: list[str]) -> None:
+        with self._db:
+            self._db.execute("INSERT OR REPLACE INTO last_run VALUES (1, ?, ?)", (at.isoformat(), json.dumps(errors)))
+
+    def last_run(self) -> LastRun | None:
+        row = self._db.execute("SELECT finished_at, errors FROM last_run").fetchone()
+        return LastRun(datetime.fromisoformat(row[0]), json.loads(row[1])) if row else None
 
     def pushed_size(self, file: str) -> int | None:
         """Size of the file when it was last pushed to the Boox, None if it never was."""

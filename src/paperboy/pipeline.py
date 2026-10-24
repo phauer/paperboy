@@ -14,7 +14,7 @@ from paperboy.converter import build_epub
 from paperboy.delivery import deliver
 from paperboy.feed import discover_post_urls
 from paperboy.macos import Notifier, SecretStore
-from paperboy.state import FINAL_STATUSES, StateStore
+from paperboy.state import FINAL_STATUSES, LastRun, StateStore, StoredPost
 from paperboy.substack import COOKIE_NAME, AuthExpired, SourceError, fetch_post, parse_post_url
 
 log = logging.getLogger(__name__)
@@ -52,6 +52,31 @@ class PushReport:
     errors: list[str] = field(default_factory=list)
 
 
+@dataclass
+class PublicationStatus:
+    host: str
+    done: int = 0
+    pending_auth: list[StoredPost] = field(default_factory=list)
+    failed: list[StoredPost] = field(default_factory=list)
+    skipped: list[StoredPost] = field(default_factory=list)  # for a reason worth reading, i.e. not backfill
+    backfill: int = 0  # older posts skipped when the publication was first seen
+
+
+@dataclass
+class Status:
+    last_run: LastRun | None
+    cookie_stored: bool
+    publications: list[PublicationStatus]
+
+    @property
+    def all_good(self) -> bool:
+        return (
+            self.last_run is not None
+            and not self.last_run.errors
+            and not any(p.pending_auth or p.failed for p in self.publications)
+        )
+
+
 class Pipeline:
     def __init__(self, deps: Deps):
         self._deps = deps
@@ -74,12 +99,34 @@ class Pipeline:
                     report.errors.append(str(e))
             if boox:
                 report.push = self._push(boox)
+            self._deps.state.record_run(self._deps.clock(), report.errors + (report.push.errors if report.push else []))
         return report
 
     def push(self, boox: Boox) -> PushReport:
         """Upload EPUBs the Boox hasn't received yet. Raises AlreadyRunning (that run pushes at its end)."""
         with self._deps.state.lock():
             return self._push(boox)
+
+    def status(self, publications: list[Publication]) -> Status:
+        """What the pipeline has done so far: per publication, plus the last run and whether a cookie is stored."""
+        by_host = {p.host: PublicationStatus(p.host) for p in publications}
+        for post in self._deps.state.posts():
+            publication = by_host.setdefault(post.publication, PublicationStatus(post.publication))
+            if post.status == "done":
+                publication.done += 1
+            elif post.status == "skipped" and post.reason == "backfill":
+                publication.backfill += 1
+            elif post.status == "pending_auth":
+                publication.pending_auth.append(post)
+            elif post.status == "skipped":
+                publication.skipped.append(post)
+            else:
+                publication.failed.append(post)
+        return Status(
+            last_run=self._deps.state.last_run(),
+            cookie_stored=self._deps.secrets.get(COOKIE_NAME) is not None,
+            publications=list(by_host.values()),
+        )
 
     def _run_publication(self, publication: Publication, report: RunReport) -> None:
         state, host = self._deps.state, publication.host

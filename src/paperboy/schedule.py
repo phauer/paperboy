@@ -50,7 +50,7 @@ def install(config: Path, push: bool) -> list[Path]:
 
 def uninstall() -> bool:
     """Stop and remove the jobs; returns False if none was installed."""
-    return any([_remove(LABEL), _remove(PUSH_LABEL)])
+    return any([_remove(label) for label in (LABEL, PUSH_LABEL)])
 
 
 def _load(label: str, content: bytes) -> Path:

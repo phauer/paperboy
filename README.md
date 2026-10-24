@@ -39,6 +39,7 @@ You get one macOS notification; after `set-cookie` with a fresh cookie, the next
 ```sh
 uv run paperboy run                                    # all new posts of the configured publications
 uv run paperboy convert https://<publication>/p/<slug>  # one specific post
+uv run paperboy status                                 # waiting, failed and skipped posts, last run
 uv run paperboy set-cookie                             # store the Substack cookie
 uv run paperboy schedule install                       # run every hour (see below)
 ```
@@ -52,6 +53,12 @@ After that, every new post is converted exactly once, even if you delete the fil
 A failing feed or post doesn't stop the others; posts that failed with a network or server error are retried on the next run.
 Only one `run` can be active at a time.
 `run` exits with code 1 if any errors occurred, so schedulers can flag them.
+
+`status` shows the pipeline's health without touching the network.
+It lists, per publication, the posts that wait for login, failed or were skipped for a reason, each with the date of its last attempt.
+Posts skipped as backfill are only counted.
+It also shows when the last `run` finished and its errors, and whether a cookie is stored (never its value).
+When nothing waits or failed, it says so.
 
 Each EPUB has a title page (title, subtitle, author, publication, date), the post body and a link to the original at the end.
 Its generated cover shows publication, title, author and date in large type, so issues are easy to tell apart as thumbnails.

@@ -84,7 +84,7 @@ def test_install_twice_replaces_the_job(cli, write_config, launchd):
     cli("schedule", "install", "--config", str(config))
     cli("schedule", "install", "--config", str(config))
 
-    assert [call[1] for call in launchd.calls] == ["bootout", "bootout", "bootstrap"] * 2
+    assert [call[1] for call in launchd.calls] == ["bootout"] * 2 + ["bootstrap"] + ["bootout"] * 2 + ["bootstrap"]
 
 
 def test_install_reports_launchctl_failure(cli, write_config, launchd, capsys):

@@ -4,6 +4,7 @@ import argparse
 import getpass
 import logging
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -11,8 +12,8 @@ import httpx
 from paperboy.config import Config, ConfigError, load_config
 from paperboy.macos import KeychainStore, MacNotifier, Notifier, SecretStore
 from paperboy import schedule
-from paperboy.pipeline import Deps, Pipeline, PushReport
-from paperboy.state import AlreadyRunning, StateStore
+from paperboy.pipeline import Deps, Pipeline, PushReport, Status
+from paperboy.state import AlreadyRunning, StateStore, StoredPost
 from paperboy.substack import COOKIE_NAME, AuthExpired, SourceError, normalize_cookie
 
 _USER_AGENT = "paperboy/0.1 (personal e-reader sync)"
@@ -56,6 +57,8 @@ def main(
                 return _set_cookie(pipeline, deps.secrets)
             if args.command == "push":
                 return _push(pipeline, config, args.quiet)
+            if args.command == "status":
+                return _status(pipeline.status(config.publications))
             return _run(pipeline, config) if args.command == "run" else _convert(pipeline, args.url)
     finally:
         state.close()
@@ -115,6 +118,45 @@ def _print_push(report: PushReport) -> None:
         print("The Boox is up to date.")
 
 
+def _status(status: Status) -> int:
+    if status.last_run is None:
+        print("Last run: none yet")
+    else:
+        errors = status.last_run.errors
+        print(f"Last run: {_local(status.last_run.finished_at, '%Y-%m-%d %H:%M')}, "
+              + (f"{len(errors)} error{'s' if len(errors) > 1 else ''}:" if errors else "no errors"))
+        for error in errors:
+            print(f"  - {error}")
+    print(f"Substack cookie: {'stored' if status.cookie_stored else 'not stored'}")
+    for publication in status.publications:
+        summary = f"{publication.done} delivered"
+        if publication.backfill:
+            summary += f", {publication.backfill} older posts skipped at first run"
+        print(f"\n{publication.host}: {summary}")
+        _print_posts("Waiting for login", publication.pending_auth)
+        _print_posts("Failed", publication.failed)
+        _print_posts("Skipped", publication.skipped)
+    print()
+    if status.all_good:
+        print("All good: nothing is waiting or failed.")
+    elif any(p.pending_auth for p in status.publications):
+        print("Paid posts wait for a valid cookie (or a subscription): run 'paperboy set-cookie' with a fresh one.")
+    return 0
+
+
+def _print_posts(label: str, posts: list[StoredPost]) -> None:
+    if posts:
+        print(f"  {label} ({len(posts)}):")
+    for post in posts:
+        print(f"    {_local(post.updated_at, '%Y-%m-%d')}  {post.url}")
+        if post.reason:
+            print(f"                {post.reason.removesuffix(f': {post.url}')}")
+
+
+def _local(at: datetime, pattern: str) -> str:
+    return at.astimezone().strftime(pattern)
+
+
 def _set_cookie(pipeline: Pipeline, secrets: SecretStore) -> int:
     # Read from a hidden prompt or stdin, never from argv, so the cookie stays out of shell history.
     raw = getpass.getpass(f"Paste the {COOKIE_NAME} cookie: ") if sys.stdin.isatty() else sys.stdin.readline()
@@ -169,6 +211,7 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("run", parents=[common], help="convert all new posts of the configured publications")
     push = commands.add_parser("push", parents=[common], help="upload EPUBs the Boox hasn't received yet")
     push.add_argument("--quiet", action="store_true", help="print only when something was pushed or failed")
+    commands.add_parser("status", parents=[common], help="show waiting, failed and skipped posts and the last run")
     commands.add_parser("set-cookie", parents=[common], help="store the Substack session cookie in the Keychain")
     scheduling = commands.add_parser("schedule", parents=[common], help="run every hour (and push every 5 minutes) via launchd")
     scheduling.add_argument("action", choices=["install", "uninstall", "show"])
