@@ -95,7 +95,8 @@ Run `uv run paperboy run` once to check that issues appear there.
    ```
 
 Issues land in `Books/Newsletters/<Publication>/` and appear in NeoReader's library without a refresh.
-You don't need to keep the BOOX Drop screen open; the server comes back on its own when the Boox wakes.
+You don't need to keep the BOOX Drop screen open; the server survives short sleeps.
+After a longer sleep (e.g. overnight) the Boox may stop the server, so open BOOX Drop again; waiting issues are pushed within 5 minutes.
 
 Each issue is pushed once.
 Issues you delete on the Boox stay deleted, and the Mac never recreates processed posts.
