@@ -55,6 +55,7 @@ Only one `run` can be active at a time.
 
 Each EPUB has a title page (title, subtitle, author, publication, date), the post body and a link to the original at the end.
 Its generated cover shows publication, title, author and date in large type, so issues are easy to tell apart as thumbnails.
+Publication, author and date are right-aligned, so NeoReader's badges on the left ("NEW", progress, "EPUB") don't cover them.
 The publication is set as the series (indexed by date), so readers that support series group and sort the issues.
 The body is cleaned up for reading: subscribe and share prompts, comment buttons, the paywall marker and app banners are removed.
 Buttons that lead somewhere meaningful (e.g. to a book) stay as plain links; YouTube videos, tweets and embedded posts become links or quotes.

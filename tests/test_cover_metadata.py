@@ -41,6 +41,23 @@ def test_cover_shows_text_in_header_title_and_footer(pipeline, substack):
     assert _ink(image, (0, 1450, 1264, 1680)) > 1000, "author and date"
 
 
+@pytest.mark.parametrize(
+    ("author", "publication"),
+    [
+        ("Erika Mustermann", "The Example Letter"),
+        ("Erika Mustermann-Musterfrau von und zu Beispielhausen", "The Very Long Example Letter on Engineering ⚡️"),
+    ],
+)
+def test_header_and_footer_leave_the_badge_corners_free(pipeline, substack, author, publication):
+    byline = {"id": 1, "name": author, "publicationUsers": [{"publication": {"id": 7, "name": publication}}]}
+    image = _cover(_convert(pipeline, substack, make_post_json(publishedBylines=[byline])))
+
+    assert _ink(image, (0, 0, 470, 180)) == 0, "NEW / progress badge at the top left (the rule below may pass under it)"
+    assert _ink(image, (0, 1450, 470, 1680)) == 0, "EPUB badge at the bottom left"
+    assert _ink(image, (800, 0, 1264, 260)) > 1000, "publication name, right-aligned"
+    assert _ink(image, (800, 1450, 1264, 1680)) > 1000, "author and date, right-aligned"
+
+
 def test_different_titles_get_different_covers(pipeline, substack):
     first = read_epub_bytes(_convert(pipeline, substack, numbered_post(1)))["EPUB/cover.jpg"]
     second = read_epub_bytes(_convert(pipeline, substack, numbered_post(2)))["EPUB/cover.jpg"]
