@@ -16,6 +16,14 @@ Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `
 
 Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
 
+### Lessons Learned
+
+Read the matching file before starting such work:
+
+- [Adding a delivery target](docs/lessons/new-delivery-targets.md): probe the real device first, distrust unofficial clients, deliver once via state, prepare state before a target goes live.
+- [Claude Code sandbox](docs/lessons/claude-code-sandbox.md): which commands need the unsandboxed run, temp files, interactive logins.
+- [Working on tickets](docs/lessons/working-on-tickets.md): tick only what's done, fold tickets after a spike, park instead of finishing for completeness.
+
 ## Architecture
 
 - `Pipeline` is the single entry point for the CLI and the tests (`run` for feeds, `convert` for one post); all I/O (HTTP client, output folder, state store, secrets, notifier, clock) comes in via `Deps`.
