@@ -36,3 +36,4 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
 - Tests assert outcomes through the pipeline seam (files, EPUB contents, epubcheck), not internals.
 - Fixtures are anonymized and made up; real responses stay in the gitignored `samples/`.
 - Never write the Substack cookie or the Kindle login into files, logs or git.
+- The installed launchd jobs run this working tree with the real `config.toml`, so code and config changes go live at the next 5-minute push. Before enabling a new delivery target, prepare the state first (e.g. mark the backlog as delivered), or uninstall the schedule meanwhile.
