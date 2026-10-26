@@ -26,6 +26,7 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
 - `cleanup` removes Substack clutter before images are fetched (`remove_clutter`) and strips leftovers, empty wrappers and tracking afterwards (`tidy`).
 - `cover` renders the typographic cover (Helvetica Neue on macOS, Pillow's bundled font elsewhere); `converter` also sets the series metadata (EPUB 3 collection and Calibre).
 - `boox` talks to the Boox's built-in BOOX Drop web server (undocumented API, probed in ticket 13); `Pipeline.push` uploads every EPUB from the output folder once, remembering pushed files and sizes in `state`, and `run` pushes at its end. An unreachable Boox is normal (it sleeps), not an error.
+- `kindle` talks to Amazon's Send to Kindle service (undocumented protocol of the desktop app, ported from `stkclient` onto httpx, ADR 0002): `kindle-login` registers paperboy with a random device serial and stores the signing credential in the Keychain. `run` and `push` send each EPUB once per target; `state` records deliveries per target (`boox`, `kindle`). The publication goes out as the author, because the Kindle ignores series. A rejected login notifies once, like an expired cookie. The test transport routes Amazon's hosts to a fake Send to Kindle server that checks request signatures.
 - `schedule` renders and (un)installs the launchd user agents (hourly `run`, `push` every 5 minutes with a Boox); tests redirect its paths and `launchctl` via an autouse fixture, so they never touch the real system.
 - `images` replaces remote images with embedded grayscale JPEGs; the pipeline supplies the download function, so all HTTP stays behind `Deps`.
 
@@ -34,4 +35,4 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
 - Code, comments and docs in English.
 - Tests assert outcomes through the pipeline seam (files, EPUB contents, epubcheck), not internals.
 - Fixtures are anonymized and made up; real responses stay in the gitignored `samples/`.
-- Never write the Substack cookie into files, logs or git.
+- Never write the Substack cookie or the Kindle login into files, logs or git.

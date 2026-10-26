@@ -30,6 +30,7 @@ class Config:
     state_file: Path
     publications: list[Publication]
     boox: Boox | None = None
+    kindle: bool = False  # send to the account's Kindles via Send to Kindle
 
 
 def load_config(path: Path) -> Config:
@@ -44,7 +45,16 @@ def load_config(path: Path) -> Config:
         state_file=_path(data, "state_file", DEFAULT_STATE_FILE, path),
         publications=_publications(data, _backfill(data.get("backfill", DEFAULT_BACKFILL), path, "backfill"), path),
         boox=_boox(data, path),
+        kindle=_kindle(data, path),
     )
+
+
+def _kindle(data: dict, path: Path) -> bool:
+    if "kindle" not in data:
+        return False
+    if not isinstance(data["kindle"], dict):
+        raise ConfigError(f"{path}: 'kindle' must be a [kindle] section")
+    return True
 
 
 def _boox(data: dict, path: Path) -> Boox | None:

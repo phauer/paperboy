@@ -1,20 +1,22 @@
 # paperboy
 
-Turns Substack posts into clean EPUBs for e-ink readers like the Boox Go 7.
+Turns Substack posts into clean EPUBs for e-ink readers like the Boox Go 7 and the Kindle Scribe.
 
 ## Status
 
-Early work in progress. It converts new free and paid posts of the configured publications every hour and pushes them to the Boox via BOOX Drop.
+Early work in progress. It converts new free and paid posts of the configured publications every hour, pushes them to the Boox via BOOX Drop and sends them to the Kindle via Send to Kindle.
 
 ## Disclaimer
 
 paperboy is a personal tool and not affiliated with or endorsed by Substack. It reads what you can already read: free posts, and paid posts of publications you subscribe to, using your own login cookie. The cookie stays in your macOS Keychain and is only ever sent to Substack. The EPUBs are meant for your own reading, so please don't share them and keep supporting the authors you read. You are responsible for using the tool in line with Substack's terms; it checks each feed once per hour. It is released under the [MIT License](LICENSE), without any warranty.
 
+paperboy is not affiliated with or endorsed by Amazon either. Delivery to the Kindle uses the undocumented protocol of Amazon's Send to Kindle desktop app, which Amazon can change at any time. Your Kindle login stays in the macOS Keychain and is only ever sent to Amazon.
+
 ## System Requirements
 
 - **macOS.** paperboy is built and tested on macOS only. It stores the Substack cookie in the macOS Keychain, shows notifications through `osascript` and runs on a schedule as launchd user agents. Linux and Windows are not supported.
 - **Python 3.13 and [uv](https://docs.astral.sh/uv/).** uv installs Python and the dependencies for you with `uv sync`.
-- **A Boox e-reader for automatic delivery.** The only supported delivery channel is BOOX Drop, the web server built into the Boox, which `push` uploads to over your local network. It is tested with a Boox Go 7. Without a Boox, paperboy still writes the EPUBs to your output folder, and you can get them onto another reader yourself, for example with a synced folder or by hand.
+- **A Boox or a Kindle for automatic delivery.** For the Boox, `push` uploads over your local network to BOOX Drop, the web server built into the device (tested with a Boox Go 7). For the Kindle, paperboy uses Amazon's Send to Kindle service (tested with a Kindle Scribe). Both can be used at the same time. Without either, paperboy still writes the EPUBs to your output folder, and you can get them onto another reader yourself, for example with a synced folder or by hand.
 - **A Substack account for paid posts.** Free posts need nothing; paid posts need your login cookie, see Paid Posts below.
 - **epubcheck (optional).** Only the tests use it (`brew install epubcheck`).
 
@@ -47,6 +49,8 @@ uv run paperboy run                                    # all new posts of the co
 uv run paperboy convert https://<publication>/p/<slug>  # one specific post
 uv run paperboy status                                 # waiting, failed and skipped posts, last run
 uv run paperboy set-cookie                             # store the Substack cookie
+uv run paperboy kindle-login                           # log in to Send to Kindle (see below)
+uv run paperboy push                                   # deliver waiting issues to the Boox and Kindle
 uv run paperboy schedule install                       # run every hour (see below)
 ```
 
@@ -54,9 +58,9 @@ EPUBs land in `<output_dir>/<Publication>/YYYY-MM-DD <Title>.epub`. Both command
 
 `run` discovers new posts through each publication's RSS feed. The first time it sees a publication, it converts only the newest posts (`backfill`, default 3) and marks older ones as skipped. After that, every new post is converted exactly once, even if you delete the file. A failing feed or post doesn't stop the others; posts that failed with a network or server error are retried on the next run. Only one `run` can be active at a time. `run` exits with code 1 if any errors occurred, so schedulers can flag them.
 
-`status` shows the pipeline's health without touching the network. It lists, per publication, the posts that wait for login, failed or were skipped for a reason, each with the date of its last attempt. Posts skipped as backfill are only counted. It also shows when the last `run` finished and its errors, and whether a cookie is stored (never its value). When nothing waits or failed, it says so.
+`status` shows the pipeline's health without touching the network. It lists, per publication, the posts that wait for login, failed or were skipped for a reason, each with the date of its last attempt. Posts skipped as backfill are only counted. It also shows when the last `run` finished and its errors, and whether a cookie is stored (never its value). With a `[kindle]` section, it shows whether a Kindle login is stored and how many issues haven't been sent yet. When nothing waits or failed, it says so.
 
-Each EPUB has a title page (title, subtitle, author, publication, date), the post body and a link to the original at the end. Its generated cover shows publication, title, author and date in large type, so issues are easy to tell apart as thumbnails. Publication, author and date are right-aligned, so NeoReader's badges on the left ("NEW", progress, "EPUB") don't cover them. The publication is set as the series (indexed by date), so readers that support series group and sort the issues. The body is cleaned up for reading: subscribe and share prompts, comment buttons, the paywall marker and app banners are removed. Buttons that lead somewhere meaningful (e.g. to a book) stay as plain links; YouTube videos, tweets and embedded posts become links or quotes. Tracking parameters are stripped from links, footnotes link both ways, code blocks wrap, and section headings appear in the reader's table of contents.
+Each EPUB has a title page (title, subtitle, author, publication, date), the post body and a link to the original at the end. Its generated cover shows publication, title, author and date in large type, so issues are easy to tell apart as thumbnails. Publication, author and date are right-aligned, so NeoReader's badges on the left ("NEW", progress, "EPUB") don't cover them. The publication is set as the series (indexed by date), so readers that support series group and sort the issues. The Kindle ignores series; see Automatic Delivery to the Kindle. The body is cleaned up for reading: subscribe and share prompts, comment buttons, the paywall marker and app banners are removed. Buttons that lead somewhere meaningful (e.g. to a book) stay as plain links; YouTube videos, tweets and embedded posts become links or quotes. Tracking parameters are stripped from links, footnotes link both ways, code blocks wrap, and section headings appear in the reader's table of contents.
 
 Images are embedded for offline reading and optimized for a monochrome e-ink screen. They are converted to grayscale with a slight contrast boost, fitted to the Boox Go 7 screen (1264×1680) and stored as JPEG. An image that can't be downloaded or decoded is left out; its caption and the rest of the post stay.
 
@@ -105,10 +109,36 @@ Two jobs are installed:
 
 They use the config file you pass (default `./config.toml`) with an absolute path, so keep the project where it is. Run `schedule install` again after adding or removing the `[boox]` section. Output and errors go to `~/Library/Logs/paperboy/paperboy.log`.
 
+## Automatic Delivery to the Kindle
+
+paperboy sends new issues to your Kindle through Amazon's **Send to Kindle** service. Amazon converts each EPUB into a Kindle document and delivers it to every Kindle on your account. The Kindle doesn't need to be awake: it picks up new documents from Amazon the next time it syncs. Reading progress, highlights and notes sync like for any Send to Kindle document.
+
+1. Log in once:
+
+   ```sh
+   uv run paperboy kindle-login
+   ```
+
+   It prints an Amazon sign-in address. Open it in a browser and sign in with the Amazon account of your Kindle. Amazon then shows an amazon.com page that may look empty or broken; copy its full address from the address bar and paste it into the terminal. paperboy registers itself as a Send to Kindle app on your account (it shows up under Manage Your Content and Devices) and stores the login in the Keychain. macOS may ask whether Python may access the Keychain item; choose **Always Allow** so scheduled runs work.
+
+2. Add an empty section to `config.toml`:
+
+   ```toml
+   [kindle]
+   ```
+
+3. Send once by hand with `uv run paperboy push`, or wait for the next hourly run.
+
+The Kindle has no folders and ignores series, so each issue is sent with its title and the publication as the author (e.g. "Put a name on it" by The Engineering Manager). Sort your library by author to group the issues by publication. The cover shows as the thumbnail.
+
+Each issue is sent once. Amazon doesn't detect duplicates, so an issue that is converted again with a different file size shows up as a second copy. paperboy can't delete documents on the Kindle; remove old issues on the device or under Manage Your Content and Devices.
+
+When Amazon no longer accepts the login, issues wait on the Mac. You get one macOS notification; after `kindle-login`, the next run or push sends everything that waits. The hourly run sends to the Kindle; the 5-minute push job is only installed for the Boox, but sends to the Kindle as well when it runs.
+
 ## Development
 
 ```sh
 uv run pytest
 ```
 
-Tests run in parallel (pytest-xdist) and go through the pipeline with a mocked Substack API and anonymized, made-up fixtures. Tests that build EPUBs validate them with epubcheck and are skipped if it is not installed. epubcheck's image check needs a writable Java temp folder; the test helper points `java.io.tmpdir` at Python's temp folder, so it also works in sandboxes. Real API responses for exploration belong in the gitignored `samples/` folder.
+Tests run in parallel (pytest-xdist) and go through the pipeline with a mocked Substack API, fake BOOX Drop and Send to Kindle servers, and anonymized, made-up fixtures. Tests that build EPUBs validate them with epubcheck and are skipped if it is not installed. epubcheck's image check needs a writable Java temp folder; the test helper points `java.io.tmpdir` at Python's temp folder, so it also works in sandboxes. Real API responses for exploration belong in the gitignored `samples/` folder.

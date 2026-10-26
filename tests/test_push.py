@@ -34,7 +34,7 @@ def test_nothing_new_means_no_traffic_to_the_boox(pipeline, substack, boox):
     pipeline.run(PUBLICATIONS, BOOX)
     requests = boox.requests
 
-    report = pipeline.push(BOOX)
+    report, = pipeline.push(BOOX)
 
     assert report.pushed == [] and report.waiting == 0
     assert boox.requests == requests
@@ -56,7 +56,7 @@ def test_regenerated_issue_replaces_the_copy_on_the_boox(pipeline, substack, boo
     local = output_dir / "The Example Letter" / "2026-03-01 Post 1.epub"
     local.write_bytes(local.read_bytes() + b"regenerated")
 
-    report = pipeline.push(BOOX)
+    report, = pipeline.push(BOOX)
 
     assert report.pushed == [local]
     assert boox.files[f"{LIBRARY}/The Example Letter/2026-03-01 Post 1.epub"] == local.read_bytes()
@@ -73,7 +73,7 @@ def test_sleeping_boox_keeps_issues_waiting_on_the_mac(pipeline, substack, boox)
     assert not report.push.reachable and report.push.waiting == 2 and report.push.errors == []
 
     boox.online = True
-    report = pipeline.push(BOOX)
+    report, = pipeline.push(BOOX)
 
     assert len(report.pushed) == 2
     assert len(boox.library()) == 2
@@ -87,7 +87,7 @@ def test_connection_lost_mid_push_continues_next_time(pipeline, substack, boox):
 
     assert len(first.pushed) == 1 and first.waiting == 2 and not first.reachable
     boox.online, boox.sleep_after_uploads = True, None
-    second = pipeline.push(BOOX)
+    second, = pipeline.push(BOOX)
 
     assert len(second.pushed) == 2
     assert len(boox.uploads) == 3  # nothing was pushed twice
@@ -104,7 +104,7 @@ def test_rejected_upload_is_an_error_and_retried(pipeline, substack, boox):
     assert report.errors == ["BOOX Drop /api/storage/upload failed: storage full"]
 
     boox.reject_uploads = set()
-    report = pipeline.push(BOOX)
+    report, = pipeline.push(BOOX)
 
     assert [p.name for p in report.pushed] == ["2026-03-01 Post 1.epub"]
 
@@ -191,7 +191,7 @@ def test_cli_push_errors_exit_nonzero(cli, substack, boox, write_config, capsys)
 
 def test_cli_push_needs_a_boox(cli, write_config, capsys):
     assert cli("push", "--config", str(write_config())) == 2
-    assert "no [boox] url configured" in capsys.readouterr().err
+    assert "no [boox] or [kindle] section configured" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("section, message", [

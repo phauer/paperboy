@@ -21,3 +21,7 @@ url = "https://newsletter.pragmaticengineer.com"
 # [boox]
 # url = "http://192.168.1.50:8085"
 # folder = "Books/Newsletters"   # library folder on the Boox (default)
+
+# Send new issues to the Kindles of your Amazon account via Send to Kindle (optional).
+# Log in once with: paperboy kindle-login
+# [kindle]

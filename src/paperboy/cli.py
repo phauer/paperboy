@@ -10,6 +10,7 @@ from pathlib import Path
 import httpx
 
 from paperboy.config import Config, ConfigError, load_config
+from paperboy.kindle import KindleError, start_login
 from paperboy.macos import KeychainStore, MacNotifier, Notifier, SecretStore
 from paperboy import schedule
 from paperboy.pipeline import Deps, Pipeline, PushReport, Status
@@ -38,8 +39,8 @@ def main(
     if args.command == "run" and not config.publications:
         print(f"error: no [[publications]] configured in {args.config}", file=sys.stderr)
         return 2
-    if args.command == "push" and not config.boox:
-        print(f"error: no [boox] url configured in {args.config}", file=sys.stderr)
+    if args.command == "push" and not (config.boox or config.kindle):
+        print(f"error: no [boox] or [kindle] section configured in {args.config}", file=sys.stderr)
         return 2
 
     state = StateStore(config.state_file)
@@ -55,10 +56,12 @@ def main(
             pipeline = Pipeline(deps)
             if args.command == "set-cookie":
                 return _set_cookie(pipeline, deps.secrets)
+            if args.command == "kindle-login":
+                return _kindle_login(pipeline)
             if args.command == "push":
                 return _push(pipeline, config, args.quiet)
             if args.command == "status":
-                return _status(pipeline.status(config.publications))
+                return _status(pipeline.status(config.publications, config.kindle))
             return _run(pipeline, config) if args.command == "run" else _convert(pipeline, args.url)
     finally:
         state.close()
@@ -77,7 +80,7 @@ def _convert(pipeline: Pipeline, url: str) -> int:
 def _run(pipeline: Pipeline, config: Config) -> int:
     logging.info("Run started for %d publications", len(config.publications))
     try:
-        report = pipeline.run(config.publications, config.boox)
+        report = pipeline.run(config.publications, config.boox, config.kindle)
     except AlreadyRunning:
         print("Another run is in progress, nothing to do.")
         return 0
@@ -89,33 +92,36 @@ def _run(pipeline: Pipeline, config: Config) -> int:
     )
     if report.pending_auth:
         print("Paid posts need a valid Substack cookie: run 'paperboy set-cookie'.")
-    if report.push:
-        _print_push(report.push)
-    return 1 if report.errors or (report.push and report.push.errors) else 0
+    pushes = [push for push in (report.push, report.kindle) if push]
+    for push in pushes:
+        _print_push(push)
+    return 1 if report.errors or any(push.errors for push in pushes) else 0
 
 
 def _push(pipeline: Pipeline, config: Config, quiet: bool) -> int:
     try:
-        report = pipeline.push(config.boox)
+        reports = pipeline.push(config.boox, config.kindle)
     except AlreadyRunning:
         return 0  # the running run pushes when it's done
-    if not quiet or report.pushed or report.errors:
-        _print_push(report)
-    return 1 if report.errors else 0
+    for report in reports:
+        if not quiet or report.pushed or report.errors:
+            _print_push(report)
+    return 1 if any(report.errors for report in reports) else 0
 
 
 def _print_push(report: PushReport) -> None:
     for path in report.pushed:
-        print(f"pushed: {path}")
+        print(f"{'pushed' if report.target == 'Boox' else 'sent to the Kindle'}: {path}")
     for error in report.errors:
         print(f"error: {error}")
+    done = f"{len(report.pushed)} {'pushed to' if report.target == 'Boox' else 'sent to'} the {report.target}"
     if not report.reachable:
-        print(f"{len(report.pushed)} pushed to the Boox; it's not reachable (asleep or off Wi-Fi), "
-              f"{report.waiting} files wait on the Mac.")
+        why = "it's not reachable (asleep or off Wi-Fi)" if report.target == "Boox" else "Send to Kindle is not reachable"
+        print(f"{done}; {why}, {report.waiting} files wait on the Mac.")
     elif report.pushed or report.errors:
-        print(f"{len(report.pushed)} pushed to the Boox, {len(report.errors)} errors")
+        print(f"{done}, {len(report.errors)} errors")
     else:
-        print("The Boox is up to date.")
+        print(f"The {report.target} is up to date.")
 
 
 def _status(status: Status) -> int:
@@ -128,6 +134,10 @@ def _status(status: Status) -> int:
         for error in errors:
             print(f"  - {error}")
     print(f"Substack cookie: {'stored' if status.cookie_stored else 'not stored'}")
+    if status.kindle:
+        login = "stored" if status.kindle.login_stored else "not stored (run 'paperboy kindle-login')"
+        waiting = f", {status.kindle.waiting} issues not sent yet" if status.kindle.waiting else ", all issues sent"
+        print(f"Kindle login: {login}{waiting}")
     for publication in status.publications:
         summary = f"{publication.done} delivered"
         if publication.backfill:
@@ -178,6 +188,30 @@ def _set_cookie(pipeline: Pipeline, secrets: SecretStore) -> int:
     return 0
 
 
+def _kindle_login(pipeline: Pipeline) -> int:
+    login = start_login()
+    print("1. Open this address in a browser and sign in with the Amazon account of your Kindle:\n")
+    print(f"{login.url}\n")
+    print("2. Amazon then shows an amazon.com page that may look empty or broken. Copy its full address.\n")
+    if sys.stdin.isatty():
+        import readline  # noqa: F401  # without it, input() hangs on lines over 1024 characters on macOS
+
+        redirect_url = input("3. Paste the address here: ")
+    else:
+        redirect_url = sys.stdin.readline()
+    try:
+        devices = pipeline.kindle_login(login, redirect_url)
+    except (KindleError, httpx.HTTPError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    print("Kindle login stored in the Keychain.")
+    if devices:
+        print(f"New issues go to: {', '.join(device.name for device in devices)}")
+    else:
+        print("warning: this Amazon account has no Kindle to send to yet.")
+    return 0
+
+
 def _schedule(action: str, config_path: Path) -> int:
     if action == "uninstall":
         removed = schedule.uninstall()
@@ -209,10 +243,11 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="paperboy", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("run", parents=[common], help="convert all new posts of the configured publications")
-    push = commands.add_parser("push", parents=[common], help="upload EPUBs the Boox hasn't received yet")
+    push = commands.add_parser("push", parents=[common], help="deliver EPUBs the Boox and Kindle haven't received yet")
     push.add_argument("--quiet", action="store_true", help="print only when something was pushed or failed")
     commands.add_parser("status", parents=[common], help="show waiting, failed and skipped posts and the last run")
     commands.add_parser("set-cookie", parents=[common], help="store the Substack session cookie in the Keychain")
+    commands.add_parser("kindle-login", parents=[common], help="log in to Send to Kindle and store the login in the Keychain")
     scheduling = commands.add_parser("schedule", parents=[common], help="run every hour (and push every 5 minutes) via launchd")
     scheduling.add_argument("action", choices=["install", "uninstall", "show"])
     convert = commands.add_parser("convert", parents=[common], help="convert a single post URL into an EPUB")

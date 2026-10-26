@@ -1,6 +1,7 @@
 """Converts a Post into EPUB bytes."""
 
 import io
+import zipfile
 from dataclasses import dataclass
 from html import escape
 
@@ -66,6 +67,20 @@ def build_epub(post: Post, fetch_image: FetchImage) -> bytes:
     buffer = io.BytesIO()
     epub.write_epub(buffer, book)
     return buffer.getvalue()
+
+
+def read_title_and_publication(data: bytes) -> tuple[str | None, str | None]:
+    """Title and publication of an EPUB built here (dc:title, dc:publisher); None where missing or unreadable."""
+    namespaces = {"c": "urn:oasis:names:tc:opendocument:xmlns:container", "dc": "http://purl.org/dc/elements/1.1/"}
+    parser = etree.XMLParser(resolve_entities=False, no_network=True)
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            container = etree.fromstring(z.read("META-INF/container.xml"), parser)
+            opf = etree.fromstring(z.read(container.find(".//c:rootfile", namespaces).get("full-path")), parser)
+    except (zipfile.BadZipFile, KeyError, AttributeError, TypeError, etree.XMLSyntaxError):
+        return None, None
+    title, publication = (opf.findtext(f".//dc:{name}", namespaces=namespaces) for name in ("title", "publisher"))
+    return (title or "").strip() or None, (publication or "").strip() or None
 
 
 def _add_series(book: epub.EpubBook, post: Post) -> None:

@@ -4,6 +4,8 @@ Fixture posts are anonymized and made up, but mirror the structure of real
 Substack API responses (bylines, captioned images, buttons, subscribe widgets).
 """
 
+import base64
+import hashlib
 import io
 import json
 import os
@@ -16,9 +18,14 @@ from email import policy
 from email.parser import BytesParser
 from email.utils import format_datetime
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa, utils
+from lxml import etree
 from PIL import Image
 
 from paperboy import schedule
@@ -223,6 +230,118 @@ class FakeBoox:
         return sorted(f.removeprefix(f"{LIBRARY}/") for f in self.files if f.startswith(f"{LIBRARY}/"))
 
 
+KINDLE_SERIAL = "G000TEST00000001"
+_UPLOAD_HOST = "upload.kindle.example"
+
+
+class FakeKindle:
+    """Fake Send to Kindle: Amazon login, device registration, the signed API and the upload host.
+
+    Mirrors the responses seen in the spike (ticket 17); signatures are checked against the issued keys.
+    """
+
+    HOSTS = {"api.amazon.com", "firs-ta-g7g.amazon.com", "kd.amazon.com", _UPLOAD_HOST}
+
+    def __init__(self):
+        self.online = True
+        self.devices = [{"deviceSerialNumber": KINDLE_SERIAL, "deviceName": "Erikas Kindle", "deviceCapabilities": {}}]
+        self.codes: dict[str, str | None] = {}  # authorization code -> PKCE challenge
+        self.serials: list[str] = []  # registered device serials
+        self.keys: dict[str, object] = {}  # adp token -> public key
+        self.uploads: dict[str, bytes] = {}
+        self.sent: list[dict] = []
+        self.api_requests = 0
+        self.reject_titles: set[str] = set()
+
+    def authorize(self, login_url: str | None = None) -> str:
+        """Sign in like the browser would; returns the URL Amazon redirects to."""
+        challenge = parse_qs(urlparse(login_url).query)["openid.oa2.code_challenge"][0] if login_url else None
+        code = f"ANcode{len(self.codes)}"
+        self.codes[code] = challenge
+        return f"https://www.amazon.com/gp/sendtokindle?openid.assoc_handle=amzn_device_na&openid.oa2.authorization_code={code}&"
+
+    def revoke(self) -> None:
+        """Invalidate every issued login, like another registration of the same serial did."""
+        self.keys.clear()
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        if not self.online:
+            raise httpx.ConnectError("Could not resolve host", request=request)
+        host, path = request.url.host, request.url.path
+        if host == "api.amazon.com" and path == "/auth/token":
+            return self._token(json.loads(request.content))
+        if host == "firs-ta-g7g.amazon.com" and path == "/FirsProxy/registerDeviceWithToken":
+            return self._register(request.content)
+        if host == _UPLOAD_HOST and request.method == "PUT":
+            self.uploads[path.rsplit("/", 1)[1]] = request.read()
+            return httpx.Response(200)
+        if host == "kd.amazon.com":
+            self.api_requests += 1
+            if not self._signed(request):
+                return httpx.Response(403, json={"Message": "Failed to validate DeviceInfoToken."})
+            return self._api(path, json.loads(request.content))
+        return httpx.Response(404)
+
+    def _token(self, body: dict) -> httpx.Response:
+        code = body["source_token"]
+        if code not in self.codes:
+            return httpx.Response(400, json={"error": "invalid_grant", "error_description": "Invalid authorization code"})
+        challenge = self.codes.pop(code)
+        verifier_hash = base64.urlsafe_b64encode(hashlib.sha256(body["code_verifier"].encode()).digest()).rstrip(b"=")
+        if challenge and verifier_hash.decode() != challenge:
+            return httpx.Response(400, json={"error": "invalid_grant", "error_description": "Code verifier mismatch"})
+        return httpx.Response(200, json={"access_token": f"Atza|token{len(self.serials)}", "token_type": "bearer"})
+
+    def _register(self, body: bytes) -> httpx.Response:
+        serial = etree.fromstring(body).findtext(".//deviceSerialNumber")
+        self.serials.append(serial)
+        key = _test_rsa_key()
+        token = f"{{enc:adp-token-{len(self.serials)}}}"
+        self.keys[token] = key.public_key()
+        pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption())
+        return httpx.Response(200, content=(
+            f"<response><adp_token>{token}</adp_token><device_private_key>{pem.decode()}</device_private_key>"
+            "<device_type>A1K6D1WRW0MALS</device_type><given_name>Erika</given_name><name>Erika Mustermann</name>"
+            "<user_device_name>Erika's Send to Kindle for Mac</user_device_name><home_region>EU</home_region></response>"
+        ).encode())
+
+    def _signed(self, request: httpx.Request) -> bool:
+        token = request.headers.get("x-adp-authentication-token", "")
+        signature, _, date = request.headers.get("x-adp-request-digest", "").partition(":")
+        if token not in self.keys:
+            return False
+        data = "\n".join(["POST", request.url.path, date, request.content.decode(), token]).encode()
+        try:
+            self.keys[token].verify(base64.b64decode(signature), hashlib.sha256(data).digest(), padding.PKCS1v15(), utils.NoDigestInfo())
+        except InvalidSignature:
+            return False
+        return True
+
+    def _api(self, path: str, body: dict) -> httpx.Response:
+        if path == "/import/kindle-doc/get-device-list":
+            return httpx.Response(200, json={"ownedDevices": self.devices, "statusCode": 0})
+        if path == "/import/upload-url":
+            token = f"stk{len(self.uploads) + len(self.sent)}-{body['fileSize']}"
+            return httpx.Response(200, json={
+                "uploadUrl": f"https://{_UPLOAD_HOST}/upload/{token}", "stkToken": token, "expiryTime": 0, "statusCode": 0,
+            })
+        if path == "/import/kindle-doc/send-to-kindle":
+            data = self.uploads.pop(body["stkToken"], None)
+            if data is None or len(data) != body["fileSize"]:
+                return httpx.Response(400, json={"Message": "Unknown upload"})
+            metadata = body["documentMetadata"]
+            if metadata["title"] in self.reject_titles:
+                return httpx.Response(400, json={"Message": "Document could not be converted"})
+            self.sent.append({**metadata, "targets": body["targetDevices"], "data": data})
+            return httpx.Response(200, json={"sku": f"SKU{len(self.sent)}", "statusCode": 0})
+        return httpx.Response(404)
+
+
+def _test_rsa_key():
+    """A fresh RSA key per registration; small, since generating 2048-bit keys per test is slow."""
+    return rsa.generate_private_key(public_exponent=65537, key_size=1024)
+
+
 def _parent(path: str) -> str:
     return path.rsplit("/", 1)[0]
 
@@ -311,12 +430,21 @@ def boox() -> FakeBoox:
 
 
 @pytest.fixture
-def transport(substack, boox) -> httpx.MockTransport:
-    """One transport for everything: the Boox by its address, Substack for the rest."""
+def kindle() -> FakeKindle:
+    return FakeKindle()
+
+
+@pytest.fixture
+def transport(substack, boox, kindle) -> httpx.MockTransport:
+    """One transport for everything: the Boox by its address, Amazon by its hosts, Substack for the rest."""
     boox_host = httpx.URL(BOOX_URL).host
 
     def route(request: httpx.Request) -> httpx.Response:
-        return boox.handler(request) if request.url.host == boox_host else substack.handler(request)
+        if request.url.host == boox_host:
+            return boox.handler(request)
+        if request.url.host in FakeKindle.HOSTS:
+            return kindle.handler(request)
+        return substack.handler(request)
 
     return httpx.MockTransport(route)
 

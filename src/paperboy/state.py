@@ -27,10 +27,12 @@ CREATE TABLE IF NOT EXISTS posts (
 CREATE TABLE IF NOT EXISTS flags (
     name TEXT PRIMARY KEY
 );
-CREATE TABLE IF NOT EXISTS pushes (
-    file TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS deliveries (
+    target TEXT NOT NULL,
+    file TEXT NOT NULL,
     size INTEGER NOT NULL,
-    pushed_at TEXT NOT NULL
+    pushed_at TEXT NOT NULL,
+    PRIMARY KEY (target, file)
 );
 CREATE TABLE IF NOT EXISTS last_run (
     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -68,6 +70,14 @@ class StateStore:
         self._path = path
         self._db = sqlite3.connect(path)
         self._db.executescript(_SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        # Before the Kindle, pushes went to the Boox only.
+        if self._db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'pushes'").fetchone():
+            with self._db:
+                self._db.execute("INSERT OR IGNORE INTO deliveries SELECT 'boox', file, size, pushed_at FROM pushes")
+                self._db.execute("DROP TABLE pushes")
 
     def close(self) -> None:
         self._db.close()
@@ -128,14 +138,14 @@ class StateStore:
         row = self._db.execute("SELECT finished_at, errors FROM last_run").fetchone()
         return LastRun(datetime.fromisoformat(row[0]), json.loads(row[1])) if row else None
 
-    def pushed_size(self, file: str) -> int | None:
-        """Size of the file when it was last pushed to the Boox, None if it never was."""
-        row = self._db.execute("SELECT size FROM pushes WHERE file = ?", (file,)).fetchone()
+    def pushed_size(self, target: str, file: str) -> int | None:
+        """Size of the file when it was last pushed to the target ("boox", "kindle"), None if it never was."""
+        row = self._db.execute("SELECT size FROM deliveries WHERE target = ? AND file = ?", (target, file)).fetchone()
         return row[0] if row else None
 
-    def record_push(self, file: str, size: int, at: datetime) -> None:
+    def record_push(self, target: str, file: str, size: int, at: datetime) -> None:
         with self._db:
-            self._db.execute("INSERT OR REPLACE INTO pushes VALUES (?, ?, ?)", (file, size, at.isoformat()))
+            self._db.execute("INSERT OR REPLACE INTO deliveries VALUES (?, ?, ?, ?)", (target, file, size, at.isoformat()))
 
     def has_flag(self, name: str) -> bool:
         return self._db.execute("SELECT 1 FROM flags WHERE name = ?", (name,)).fetchone() is not None
