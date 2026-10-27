@@ -42,6 +42,8 @@ The cookie is sent only to `substack.com`, never stored in files or logs, and on
 
 When the cookie expires, paid posts are held back instead of delivered as teasers. You get one macOS notification; after `set-cookie` with a fresh cookie, the next run delivers all waiting posts.
 
+Paid posts of publications you follow only for free arrive as teasers: the free part, ending with a link to the full post. The title gets the suffix "(Teaser)" and the cover a black "TEASER" band, so you can tell them apart in the library and on the Kindle. Teasers are final; if you subscribe later, `convert` fetches the full version by hand.
+
 ## Usage
 
 ```sh

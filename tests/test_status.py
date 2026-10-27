@@ -44,7 +44,7 @@ def test_posts_waiting_for_login_are_listed_with_reason(pipeline, substack, secr
     assert f"{HOST}: 1 delivered" in out
     assert "  Waiting for login (1):" in out
     assert f"    {NOW.astimezone():%Y-%m-%d}  https://{HOST}/p/post-2\n" in out
-    assert "Substack returned only the teaser (cookie expired or not subscribed?)\n" in out, "reason without the URL again"
+    assert "Substack returned only the teaser (cookie expired?)\n" in out, "reason without the URL again"
     assert "set-cookie" in out
     assert "All good" not in out
 

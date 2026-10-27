@@ -15,12 +15,13 @@ _BADGE_CLEARANCE = 380
 _SIDE_WIDTH = _TEXT_WIDTH - _BADGE_CLEARANCE
 _TITLE_SIZES = range(136, 63, -8)  # largest first, shrink until the title fits
 _TITLE_TOP = 420
+_TEASER_BAND = (300, 400)
 _TITLE_BOTTOM = SIZE[1] - 360
 _FONT_FILE = "/System/Library/Fonts/HelveticaNeue.ttc"
 _REGULAR, _BOLD = 0, 1
 
 
-def render_cover(publication: str, title: str, author: str, published: datetime) -> bytes:
+def render_cover(publication: str, title: str, author: str, published: datetime, teaser: bool = False) -> bytes:
     image = Image.new("L", SIZE, 255)
     draw = ImageDraw.Draw(image)
 
@@ -29,6 +30,12 @@ def render_cover(publication: str, title: str, author: str, published: datetime)
         _draw_right(draw, y, line, _font(_REGULAR, 60))
         y += 76
     draw.rectangle((_MARGIN, y + 24, SIZE[0] - _MARGIN, y + 36), fill=0)
+
+    if teaser:
+        # Between the header rule (at most y=284) and the title, centered so the badges don't hide it.
+        top, bottom = _TEASER_BAND
+        draw.rectangle((_MARGIN, top, SIZE[0] - _MARGIN, bottom), fill=0)
+        draw.text((SIZE[0] // 2, (top + bottom) // 2), "TEASER", font=_font(_BOLD, 72), fill=255, anchor="mm")
 
     title_font, lines = _fit_title(title)
     line_height = int(title_font.size * 1.15)

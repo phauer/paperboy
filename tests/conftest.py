@@ -89,6 +89,7 @@ class FakeSubstack:
         self.cookies_sent: list[tuple[str, str]] = []
         self.full_posts: dict[int, dict] = {}
         self.valid_cookie: str | None = VALID_COOKIE
+        self.membership = "subscribed"  # the logged-in user's subscription; "free_signup" gets teasers only
 
     def add(self, post_json: dict, host: str = HOST) -> str:
         """Make a post available via the post API and return its URL."""
@@ -131,9 +132,13 @@ class FakeSubstack:
             return httpx.Response(404)
         post = self.full_posts[post_id]
         logged_in = self.valid_cookie and cookie == f"substack.sid={self.valid_cookie}"
-        body = {"post": post if logged_in else {**post, "body_html": TEASER_BODY}, "publication": {"id": 7}}
-        if logged_in:
-            body["subscription"] = {"membership_state": "subscribed"}
+        paying = logged_in and self.membership == "subscribed"
+        # Substack sends "subscription": null when nobody is logged in.
+        body = {
+            "post": post if paying else {**post, "body_html": TEASER_BODY},
+            "publication": {"id": 7},
+            "subscription": {"membership_state": self.membership} if logged_in else None,
+        }
         return httpx.Response(200, content=json.dumps(body))
 
     def _feed_xml(self, host: str) -> str:

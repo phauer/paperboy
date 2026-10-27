@@ -34,7 +34,7 @@ def build_epub(post: Post, fetch_image: FetchImage) -> bytes:
     body_html, images, headings = _prepare_body(post, fetch_image)
     book = epub.EpubBook()
     book.set_identifier(post.url)
-    book.set_title(post.title)
+    book.set_title(post.library_title)
     book.set_language(post.language)
     if post.author:
         book.add_author(post.author)
@@ -44,7 +44,9 @@ def build_epub(post: Post, fetch_image: FetchImage) -> bytes:
         book.add_metadata("DC", "description", post.subtitle)
     _add_series(book, post)
     book.set_cover(
-        "cover.jpg", render_cover(post.publication, post.title, post.author, post.published), create_page=False
+        "cover.jpg",
+        render_cover(post.publication, post.title, post.author, post.published, teaser=post.teaser),
+        create_page=False,
     )
 
     css = epub.EpubItem(uid="style", file_name="style.css", media_type="text/css", content=_CSS)
@@ -114,9 +116,10 @@ def _title_page_html(post: Post) -> str:
 
 def _content_html(post: Post, body_html: str) -> str:
     url = escape(post.url)
+    label = "This is only the free part of a paid post. The full post:" if post.teaser else "Original:"
     return (
         f"{body_html}\n"
-        f'<hr/>\n<p class="source">Original: <a href="{url}">{url}</a></p>'
+        f'<hr/>\n<p class="source">{label} <a href="{url}">{url}</a></p>'
     )
 
 

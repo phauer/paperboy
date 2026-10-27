@@ -27,7 +27,7 @@ class SourceError(Exception):
 
 
 class AuthExpired(Exception):
-    """A paid post came back as a teaser: the cookie is missing, expired or not subscribed."""
+    """A paid post came back as a teaser although the reader pays, or nobody is logged in: the cookie is missing or expired."""
 
 
 def parse_post_url(url: str) -> tuple[str, str]:
@@ -40,21 +40,29 @@ def parse_post_url(url: str) -> tuple[str, str]:
 
 
 def fetch_post(client: httpx.Client, url: str, cookie: str | None = None) -> Post:
+    """Raises AuthExpired when a paid post needs a valid login; a free subscriber gets the teaser."""
     host, slug = parse_post_url(url)
     data = _get_json(client, f"https://{host}/api/v1/posts/{slug}", url)
+    teaser = False
     if data.get("audience", "everyone") != "everyone":
-        data = _fetch_full_text(client, data, url, cookie)
-    return _to_post(data, host)
+        data, teaser = _fetch_full_text(client, data, url, cookie)
+    return _to_post(data, host, teaser)
 
 
-def _fetch_full_text(client: httpx.Client, data: dict, url: str, cookie: str | None) -> dict:
+def _fetch_full_text(client: httpx.Client, data: dict, url: str, cookie: str | None) -> tuple[dict, bool]:
+    """The paid post and whether it is only the teaser."""
     if not cookie:
         raise AuthExpired(f"Paid post needs a Substack cookie: {url}")
     full = _get_json(client, _FULL_POST_URL.format(id=data["id"]), url, cookie)
     post = full.get("post") or {}
-    if _is_teaser(post):
-        raise AuthExpired(f"Substack returned only the teaser (cookie expired or not subscribed?): {url}")
-    return post
+    if not _is_teaser(post):
+        return post, False
+    # "subscription" is null when the cookie isn't accepted; a logged-in reader without
+    # a paid subscription gets the teaser, which is all there is to deliver.
+    membership = (full.get("subscription") or {}).get("membership_state")
+    if membership and membership != "subscribed":
+        return post, True
+    raise AuthExpired(f"Substack returned only the teaser (cookie expired?): {url}")
 
 
 def _is_teaser(post: dict) -> bool:
@@ -77,7 +85,7 @@ def _get_json(client: httpx.Client, api_url: str, url: str, cookie: str | None =
     return response.json()
 
 
-def _to_post(data: dict, host: str) -> Post:
+def _to_post(data: dict, host: str, teaser: bool = False) -> Post:
     bylines = data.get("publishedBylines") or []
     return Post(
         publication=_publication_name(bylines) or host,
@@ -88,6 +96,7 @@ def _to_post(data: dict, host: str) -> Post:
         url=data.get("canonical_url") or f"https://{host}/p/{data['slug']}",
         language=data.get("language") or "en",
         body_html=data.get("body_html") or "",
+        teaser=teaser,
     )
 
 

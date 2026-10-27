@@ -150,7 +150,7 @@ def _status(status: Status) -> int:
     if status.all_good:
         print("All good: nothing is waiting or failed.")
     elif any(p.pending_auth for p in status.publications):
-        print("Paid posts wait for a valid cookie (or a subscription): run 'paperboy set-cookie' with a fresh one.")
+        print("Paid posts wait for a valid cookie: run 'paperboy set-cookie' with a fresh one.")
     return 0
 
 

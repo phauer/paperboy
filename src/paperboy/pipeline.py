@@ -166,7 +166,8 @@ class Pipeline:
         urls += [url for url in state.post_urls(host, "pending_auth") if url not in urls]
         for position, url in enumerate(urls):
             _, slug = parse_post_url(url)
-            if state.post_status(host, slug) in FINAL_STATUSES:
+            previous = state.post_status(host, slug)
+            if previous in FINAL_STATUSES:
                 continue
             if first_sight and position >= publication.backfill:
                 state.record_post(host, slug, url=url, status="skipped", reason="backfill", at=self._deps.clock())
@@ -186,6 +187,9 @@ class Pipeline:
                 continue
             state.record_post(host, slug, url=url, status="done", file=path, at=self._deps.clock())
             report.converted.append(path)
+            if previous == "pending_auth":
+                # The login works (again), so the next expiry deserves a new notification.
+                state.set_flag(AUTH_EXPIRY_NOTIFIED, False)
         state.add_publication(host, self._deps.clock())
 
     def _pending(self, target: str) -> list[tuple[Path, str, int]]:
