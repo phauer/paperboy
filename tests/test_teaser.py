@@ -10,7 +10,9 @@ from paperboy.substack import AuthExpired
 
 FULL_BODY = "<p>" + "Full paid text. " * 50 + "</p>"
 PUBLICATION = Publication(HOST, backfill=3)
-BAND = (96, 300, 1168, 400)
+CENTER = (232, 640, 1032, 1040)  # below the one-line title
+TOP_LEFT = (96, 600, 400, 900)
+BOTTOM_RIGHT = (864, 1000, 1168, 1300)
 
 
 def _paid(number: int) -> dict:
@@ -23,6 +25,11 @@ def _cover(path) -> Image.Image:
 
 def _dark(image: Image.Image, box) -> int:
     return sum(image.crop(box).histogram()[:128])
+
+
+def _gray(image: Image.Image, box) -> int:
+    """Light gray pixels, as left by the watermark on white."""
+    return sum(image.crop(box).histogram()[150:215])
 
 
 @pytest.fixture
@@ -62,13 +69,15 @@ def test_teaser_ends_with_a_link_to_the_full_post(pipeline, substack):
 
 
 @pytest.mark.usefixtures("free_signup")
-def test_teaser_cover_shows_a_band(pipeline, substack):
+def test_teaser_cover_shows_a_gray_diagonal_watermark(pipeline, substack):
     teaser = _cover(pipeline.convert(substack.add_paid(_paid(1))))
     regular = _cover(pipeline.convert(substack.add(numbered_post(2))))
 
-    assert _dark(teaser, BAND) > 0.5 * (BAND[2] - BAND[0]) * (BAND[3] - BAND[1]), "mostly black"
-    assert sum(teaser.crop(BAND).histogram()[200:]) > 1000, "white lettering"
-    assert _dark(regular, BAND) == 0, "regular covers have no band"
+    assert _gray(teaser, CENTER) > 20000, "watermark across the middle"
+    assert _dark(teaser, CENTER) == 0, "light gray, not black"
+    assert _gray(regular, CENTER) == 0, "regular covers have no watermark"
+    for corner in (TOP_LEFT, BOTTOM_RIGHT):
+        assert _gray(teaser, corner) == 0, "runs bottom left to top right"
 
 
 def test_paid_subscriber_never_gets_a_teaser_title(pipeline, substack):

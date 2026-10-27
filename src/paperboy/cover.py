@@ -2,6 +2,7 @@
 
 import io
 import logging
+import math
 import unicodedata
 from datetime import datetime
 from functools import cache
@@ -22,7 +23,8 @@ _BADGE_CLEARANCE = 380
 _SIDE_WIDTH = _TEXT_WIDTH - _BADGE_CLEARANCE
 _TITLE_SIZES = range(136, 63, -8)  # largest first, shrink until the title fits
 _TITLE_TOP = 420
-_TEASER_BAND = (300, 400)
+_WATERMARK_SIZE = 360  # largest first, shrink until it fits the diagonal
+_WATERMARK_OPACITY = 0.3  # light gray on white, still visible on 16-level e-ink
 _LOGO_SIZE = 300
 _LOGO_TOP = 1110  # the box ends about 50 px above the author line
 _TITLE_BOTTOM = SIZE[1] - 360
@@ -49,12 +51,6 @@ def render_cover(
         y += 76
     draw.rectangle((_MARGIN, y + 24, SIZE[0] - _MARGIN, y + 36), fill=0)
 
-    if teaser:
-        # Between the header rule (at most y=284) and the title, centered so the badges don't hide it.
-        top, bottom = _TEASER_BAND
-        draw.rectangle((_MARGIN, top, SIZE[0] - _MARGIN, bottom), fill=0)
-        draw.text((SIZE[0] // 2, (top + bottom) // 2), "TEASER", font=_font(_BOLD, 72), fill=255, anchor="mm")
-
     # The logo takes the lower part of the title area, so the title ends above it.
     title_font, lines = _fit_title(title, bottom=_LOGO_TOP - 10 if logo_image else _TITLE_BOTTOM)
     line_height = int(title_font.size * 1.15)
@@ -72,9 +68,26 @@ def render_cover(
     for number, line in enumerate(reversed(footer)):
         _draw_right(draw, SIZE[1] - _MARGIN - 52 - number * 70, line, _font(_REGULAR, 52))
 
+    if teaser:
+        image = _watermark(image, "TEASER")
+
     out = io.BytesIO()
     image.save(out, format="JPEG", quality=85, optimize=True)
     return out.getvalue()
+
+
+def _watermark(image: Image.Image, text: str) -> Image.Image:
+    """Translucent black text along the diagonal (bottom left to top right): gray on white, black stays black."""
+    diagonal = math.hypot(*SIZE)
+    size = _WATERMARK_SIZE
+    while _font(_BOLD, size).getlength(text) > diagonal * 0.85:
+        size -= 10
+    strip = Image.new("L", (int(diagonal), size * 2), 0)
+    ImageDraw.Draw(strip).text((strip.width // 2, size), text, font=_font(_BOLD, size), fill=255, anchor="mm")
+    strip = strip.rotate(math.degrees(math.atan2(*reversed(SIZE))), expand=True, resample=Image.Resampling.BICUBIC)
+    left, top = (strip.width - SIZE[0]) // 2, (strip.height - SIZE[1]) // 2
+    mask = strip.crop((left, top, left + SIZE[0], top + SIZE[1])).point(lambda v: int(v * _WATERMARK_OPACITY))
+    return Image.composite(Image.new("L", SIZE, 0), image, mask)
 
 
 def _drawable(text: str, face: int) -> str:
