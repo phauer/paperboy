@@ -121,3 +121,60 @@ def test_series_index_sorts_issues_chronologically(pipeline, substack):
         indexes.append(int(re.search(r'calibre:series_index" content="(\d+)"', opf).group(1)))
 
     assert indexes == [20260312, 20260303, 20260307]
+
+
+def _cover_with(pipeline, substack, slug, title="A Fine Post", publication="The Example Letter", author="Erika Mustermann"):
+    byline = {"id": 1, "name": author, "publicationUsers": [{"publication": {"id": 7, "name": publication}}]}
+    post = make_post_json(slug=slug, title=title, publishedBylines=[byline])
+    return read_epub_bytes(pipeline.convert(substack.add(post)))["EPUB/cover.jpg"]
+
+
+@pytest.mark.parametrize(
+    "field, with_symbols, plain",
+    [
+        ("publication", "Engineering Leader's Playbook ⚡️", "Engineering Leader's Playbook"),
+        ("publication", "🚀 Launch 🚀 Notes", "Launch Notes"),
+        ("title", "Ship it → 🚀 now", "Ship it now"),
+        ("title", "日本 Tokyo notes", "Tokyo notes"),
+        ("author", "Erika 👩🏽‍💻 Mustermann", "Erika Mustermann"),
+    ],
+)
+def test_characters_the_font_cannot_draw_are_left_out(pipeline, substack, field, with_symbols, plain):
+    assert _cover_with(pipeline, substack, "a", **{field: with_symbols}) == _cover_with(pipeline, substack, "b", **{field: plain})
+
+
+def test_undrawable_publication_and_author_leave_their_lines_out(pipeline, substack):
+    image = Image.open(io.BytesIO(_cover_with(pipeline, substack, "a", publication="⚡️🚀", author="👩🏽‍💻")))
+
+    assert _ink(image, (0, 0, 1264, 110)) == 0, "no publication line, only the rule below"
+    assert _ink(image, (0, 1450, 1264, 1525)) == 0, "no author line, only the date below"
+    assert _ink(image, (800, 1525, 1264, 1680)) > 1000, "date"
+
+
+def test_undrawable_title_is_kept_so_the_cover_has_a_title(pipeline, substack):
+    image = Image.open(io.BytesIO(_cover_with(pipeline, substack, "a", title="🚀🚀🚀")))
+
+    assert _ink(image, (0, 420, 1264, 700)) > 1000
+
+
+def test_only_the_cover_drops_characters(pipeline, substack):
+    byline = {"id": 1, "name": "Erika 🚀", "publicationUsers": [{"publication": {"id": 7, "name": "Playbook ⚡️"}}]}
+    path = pipeline.convert(substack.add(make_post_json(title="Ship it 🚀", publishedBylines=[byline])))
+
+    epub = read_epub(path)
+    assert path.parent.name == "Playbook ⚡️" and path.name.endswith("Ship it 🚀.epub")
+    assert "<dc:publisher>Playbook ⚡️</dc:publisher>" in epub["EPUB/content.opf"]
+    assert "<dc:title>Ship it 🚀</dc:title>" in epub["EPUB/content.opf"]
+    assert "Ship it 🚀" in epub["EPUB/title.xhtml"] and "Erika 🚀" in epub["EPUB/title.xhtml"]
+
+
+def test_fallback_font_drops_what_it_cannot_draw(pipeline, substack, monkeypatch):
+    monkeypatch.setattr(cover, "_FONT_FILE", "/nonexistent/font.ttc")
+    cover._font.cache_clear()
+    try:
+        with_symbols = _cover_with(pipeline, substack, "a", publication="Letter ⚡️ Weekly")
+        plain = _cover_with(pipeline, substack, "b", publication="Letter Weekly")
+    finally:
+        cover._font.cache_clear()
+
+    assert with_symbols == plain

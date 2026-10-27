@@ -2,6 +2,7 @@
 
 import io
 import logging
+import unicodedata
 from datetime import datetime
 from functools import cache
 
@@ -27,6 +28,7 @@ _LOGO_TOP = 1110  # the box ends about 50 px above the author line
 _TITLE_BOTTOM = SIZE[1] - 360
 _FONT_FILE = "/System/Library/Fonts/HelveticaNeue.ttc"
 _REGULAR, _BOLD = 0, 1
+_MISSING = "\U000f0000"  # a private-use character: no font has it, so it renders as the "missing glyph" box
 
 
 def render_cover(
@@ -35,9 +37,14 @@ def render_cover(
     image = Image.new("L", SIZE, 255)
     draw = ImageDraw.Draw(image)
     logo_image = _decode_logo(logo) if logo else None
+    # Characters the font lacks (emoji, arrows, CJK) would show as empty boxes; an undrawable
+    # title stays as it is, so the cover always has one.
+    publication = _drawable(publication, _REGULAR)
+    author = _drawable(author, _REGULAR)
+    title = _drawable(title, _BOLD) or title
 
     y = _MARGIN
-    for line in _wrap(publication, _font(_REGULAR, 60), max_lines=2, width=_SIDE_WIDTH):
+    for line in _wrap(publication, _font(_REGULAR, 60), max_lines=2, width=_SIDE_WIDTH) if publication else []:
         draw.text((_MARGIN, y), line, font=_font(_REGULAR, 60), fill=0)
         y += 76
     draw.rectangle((_MARGIN, y + 24, SIZE[0] - _MARGIN, y + 36), fill=0)
@@ -68,6 +75,28 @@ def render_cover(
     out = io.BytesIO()
     image.save(out, format="JPEG", quality=85, optimize=True)
     return out.getvalue()
+
+
+def _drawable(text: str, face: int) -> str:
+    """The text without characters the font has no glyph for, with spaces tidied up."""
+    font = _font(face, 60)
+    kept = "".join(c for c in text if c.isspace() or (not _invisible(c) and _has_glyph(font, c)))
+    return " ".join(kept.split())
+
+
+def _invisible(char: str) -> bool:
+    """Joiners and variation selectors: they only steer emoji, which are dropped anyway."""
+    return unicodedata.category(char) == "Cf" or "︀" <= char <= "️" or "\U000e0100" <= char <= "\U000e01ef"
+
+
+@cache
+def _has_glyph(font: ImageFont.FreeTypeFont, char: str) -> bool:
+    return _mask(font, char) != _mask(font, _MISSING)
+
+
+def _mask(font: ImageFont.FreeTypeFont, char: str) -> tuple:
+    mask = font.getmask(char)
+    return mask.size, bytes(mask)
 
 
 def _draw_right(draw: ImageDraw.ImageDraw, y: int, text: str, font: ImageFont.FreeTypeFont) -> None:
