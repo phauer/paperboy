@@ -14,8 +14,9 @@ log = logging.getLogger(__name__)
 SIZE = (1264, 1680)  # Boox Go 7 screen, portrait
 _MARGIN = 96
 _TEXT_WIDTH = SIZE[0] - 2 * _MARGIN
-# NeoReader puts badges on the left of the thumbnail ("NEW"/progress at the top, "EPUB" at the bottom),
-# so the header and footer are right-aligned and keep this much of the left side free.
+# The Kindle puts badges on the thumbnail's top right (progress, "read" flag) and bottom left (a check
+# symbol), so the header is left-aligned, the footer right-aligned, and both keep this much of their
+# opposite side free. NeoReader's badges on the Boox (left side) may cover the header.
 _BADGE_CLEARANCE = 380
 _SIDE_WIDTH = _TEXT_WIDTH - _BADGE_CLEARANCE
 _TITLE_SIZES = range(136, 63, -8)  # largest first, shrink until the title fits
@@ -37,7 +38,7 @@ def render_cover(
 
     y = _MARGIN
     for line in _wrap(publication, _font(_REGULAR, 60), max_lines=2, width=_SIDE_WIDTH):
-        _draw_right(draw, y, line, _font(_REGULAR, 60))
+        draw.text((_MARGIN, y), line, font=_font(_REGULAR, 60), fill=0)
         y += 76
     draw.rectangle((_MARGIN, y + 24, SIZE[0] - _MARGIN, y + 36), fill=0)
 
