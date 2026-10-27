@@ -61,7 +61,7 @@ def process_image(data: bytes) -> bytes | None:
         with Image.open(io.BytesIO(data)) as original:
             if max(original.size) < _MIN_SIZE:
                 return None
-            image = _on_white(original).convert("L")
+            image = on_white(original).convert("L")
             image = ImageEnhance.Contrast(image).enhance(CONTRAST)
             image.thumbnail(MAX_SIZE, Image.Resampling.LANCZOS)
             out = io.BytesIO()
@@ -71,7 +71,7 @@ def process_image(data: bytes) -> bytes | None:
         return None
 
 
-def _on_white(image: Image.Image) -> Image.Image:
+def on_white(image: Image.Image) -> Image.Image:
     """Flatten transparency onto white, so transparent areas don't turn black."""
     if image.mode in ("RGBA", "LA", "PA") or "transparency" in image.info:
         rgba = image.convert("RGBA")

@@ -45,7 +45,14 @@ def build_epub(post: Post, fetch_image: FetchImage) -> bytes:
     _add_series(book, post)
     book.set_cover(
         "cover.jpg",
-        render_cover(post.publication, post.title, post.author, post.published, teaser=post.teaser),
+        render_cover(
+            post.publication,
+            post.title,
+            post.author,
+            post.published,
+            teaser=post.teaser,
+            logo=fetch_image(post.logo_url) if post.logo_url else None,
+        ),
         create_page=False,
     )
 

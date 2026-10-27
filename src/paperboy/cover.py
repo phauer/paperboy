@@ -1,10 +1,15 @@
 """Renders a typographic cover that stays readable as a library thumbnail."""
 
 import io
+import logging
 from datetime import datetime
 from functools import cache
 
 from PIL import Image, ImageDraw, ImageFont
+
+from paperboy.images import on_white
+
+log = logging.getLogger(__name__)
 
 SIZE = (1264, 1680)  # Boox Go 7 screen, portrait
 _MARGIN = 96
@@ -16,14 +21,19 @@ _SIDE_WIDTH = _TEXT_WIDTH - _BADGE_CLEARANCE
 _TITLE_SIZES = range(136, 63, -8)  # largest first, shrink until the title fits
 _TITLE_TOP = 420
 _TEASER_BAND = (300, 400)
+_LOGO_SIZE = 300
+_LOGO_TOP = 1110  # the box ends about 50 px above the author line
 _TITLE_BOTTOM = SIZE[1] - 360
 _FONT_FILE = "/System/Library/Fonts/HelveticaNeue.ttc"
 _REGULAR, _BOLD = 0, 1
 
 
-def render_cover(publication: str, title: str, author: str, published: datetime, teaser: bool = False) -> bytes:
+def render_cover(
+    publication: str, title: str, author: str, published: datetime, teaser: bool = False, logo: bytes | None = None
+) -> bytes:
     image = Image.new("L", SIZE, 255)
     draw = ImageDraw.Draw(image)
+    logo_image = _decode_logo(logo) if logo else None
 
     y = _MARGIN
     for line in _wrap(publication, _font(_REGULAR, 60), max_lines=2, width=_SIDE_WIDTH):
@@ -37,10 +47,16 @@ def render_cover(publication: str, title: str, author: str, published: datetime,
         draw.rectangle((_MARGIN, top, SIZE[0] - _MARGIN, bottom), fill=0)
         draw.text((SIZE[0] // 2, (top + bottom) // 2), "TEASER", font=_font(_BOLD, 72), fill=255, anchor="mm")
 
-    title_font, lines = _fit_title(title)
+    # The logo takes the lower part of the title area, so the title ends above it.
+    title_font, lines = _fit_title(title, bottom=_LOGO_TOP - 10 if logo_image else _TITLE_BOTTOM)
     line_height = int(title_font.size * 1.15)
     for number, line in enumerate(lines):
         draw.text((_MARGIN, _TITLE_TOP + number * line_height), line, font=title_font, fill=0)
+
+    if logo_image:
+        # Right-aligned and bottom-aligned in its box, so it sits right above the footer.
+        x = SIZE[0] - _MARGIN - logo_image.width
+        image.paste(logo_image, (x, _LOGO_TOP + _LOGO_SIZE - logo_image.height))
 
     footer = [published.strftime("%-d %B %Y")]
     if author:
@@ -57,10 +73,22 @@ def _draw_right(draw: ImageDraw.ImageDraw, y: int, text: str, font: ImageFont.Fr
     draw.text((SIZE[0] - _MARGIN, y), text, font=font, fill=0, anchor="ra")
 
 
-def _fit_title(title: str) -> tuple[ImageFont.FreeTypeFont, list[str]]:
+def _decode_logo(data: bytes) -> Image.Image | None:
+    """The logo in grayscale, fitted into the logo box; None if it can't be decoded."""
+    try:
+        with Image.open(io.BytesIO(data)) as original:
+            logo = on_white(original).convert("L")
+            logo.thumbnail((_LOGO_SIZE, _LOGO_SIZE), Image.Resampling.LANCZOS)
+            return logo
+    except (OSError, ValueError, Image.DecompressionBombError):
+        log.warning("Cover without logo: the image could not be decoded")
+        return None
+
+
+def _fit_title(title: str, bottom: int) -> tuple[ImageFont.FreeTypeFont, list[str]]:
     for size in _TITLE_SIZES:
         font = _font(_BOLD, size)
-        max_lines = (_TITLE_BOTTOM - _TITLE_TOP) // int(size * 1.15)
+        max_lines = (bottom - _TITLE_TOP) // int(size * 1.15)
         lines = _wrap(title, font, max_lines=None)
         if len(lines) <= max_lines:
             return font, lines

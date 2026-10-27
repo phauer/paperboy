@@ -2,7 +2,7 @@
 
 import re
 from datetime import datetime
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 
@@ -14,6 +14,9 @@ _POST_PATH = re.compile(r"^/p/([^/]+)/?$")
 # domains or *.substack.com) only ever return the teaser of a paid post,
 # while this endpoint returns the full text for a logged-in subscriber.
 _FULL_POST_URL = "https://substack.com/api/v1/posts/by-id/{id}"
+
+_CDN_HOST = "substackcdn.com"
+_LOGO_WIDTH = 300  # as drawn on the cover
 
 # A paid body with fewer words than this share of the declared word count is a teaser.
 _FULL_TEXT_RATIO = 0.8
@@ -87,8 +90,9 @@ def _get_json(client: httpx.Client, api_url: str, url: str, cookie: str | None =
 
 def _to_post(data: dict, host: str, teaser: bool = False) -> Post:
     bylines = data.get("publishedBylines") or []
+    publication = _publication(bylines)
     return Post(
-        publication=_publication_name(bylines) or host,
+        publication=publication.get("name") or host,
         title=data["title"],
         subtitle=data.get("subtitle") or "",
         author=", ".join(b["name"] for b in bylines if b.get("name")),
@@ -97,16 +101,27 @@ def _to_post(data: dict, host: str, teaser: bool = False) -> Post:
         language=data.get("language") or "en",
         body_html=data.get("body_html") or "",
         teaser=teaser,
+        logo_url=_via_cdn(publication.get("logo_url")),
     )
 
 
-def _publication_name(bylines: list[dict]) -> str | None:
+def _publication(bylines: list[dict]) -> dict:
+    """The first named publication of the bylines, or {}."""
     for byline in bylines:
         for publication_user in byline.get("publicationUsers") or []:
-            name = (publication_user.get("publication") or {}).get("name")
-            if name:
-                return name
-    return None
+            publication = publication_user.get("publication") or {}
+            if publication.get("name"):
+                return publication
+    return {}
+
+
+def _via_cdn(url: str | None) -> str | None:
+    """Route an image through Substack's CDN: raw S3 links can be denied, the CDN serves them."""
+    if not url or not url.startswith("https://"):
+        return None
+    if urlparse(url).hostname == _CDN_HOST:
+        return url
+    return f"https://{_CDN_HOST}/image/fetch/w_{_LOGO_WIDTH}/{quote(url, safe='')}"
 
 
 def normalize_cookie(raw: str) -> str:

@@ -17,6 +17,7 @@ class Post:
     language: str
     body_html: str
     teaser: bool = False  # only the free part of a paid post
+    logo_url: str | None = None  # the publication's logo, shown on the cover
 
     @property
     def library_title(self) -> str:
