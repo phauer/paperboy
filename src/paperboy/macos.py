@@ -17,13 +17,23 @@ class SecretStore(Protocol):
 
 
 class KeychainStore:
-    """Stores secrets in the macOS login Keychain."""
+    """Stores secrets in the macOS login Keychain.
+
+    Reads are cached per process: every Keychain read can raise an access prompt, and the pipeline asks for the
+    cookie once per post.
+    """
+
+    def __init__(self) -> None:
+        self._cache: dict[str, str | None] = {}
 
     def get(self, name: str) -> str | None:
-        return keyring.get_password(_SERVICE, name)
+        if name not in self._cache:
+            self._cache[name] = keyring.get_password(_SERVICE, name)
+        return self._cache[name]
 
     def set(self, name: str, value: str) -> None:
         keyring.set_password(_SERVICE, name, value)
+        self._cache[name] = value
 
 
 class Notifier(Protocol):
