@@ -38,7 +38,7 @@ Paid posts need your Substack login cookie. Copy it once from your browser and s
 3. Copy the value of `substack.sid`.
 4. Run `uv run paperboy set-cookie` in a terminal and paste it (input stays hidden). Without an interactive terminal, pipe it in from the clipboard instead: `pbpaste | uv run paperboy set-cookie`.
 
-The cookie is sent only to `substack.com`, never stored in files or logs, and only read from the Keychain. macOS may ask once whether Python may access the Keychain item; choose **Always Allow** so scheduled runs work.
+The cookie is sent only to `substack.com`, never stored in files or logs, and only read from the Keychain.
 
 When the cookie expires, paid posts are held back instead of delivered as teasers. You get one macOS notification; after `set-cookie` with a fresh cookie, the next run delivers all waiting posts.
 
@@ -121,7 +121,7 @@ paperboy sends new issues to your Kindle through Amazon's **Send to Kindle** ser
    uv run paperboy kindle-login
    ```
 
-   It prints an Amazon sign-in address. Open it in a browser and sign in with the Amazon account of your Kindle. Amazon then shows an amazon.com page that may look empty or broken; copy its full address from the address bar and paste it into the terminal. paperboy registers itself as a Send to Kindle app on your account (it shows up under Manage Your Content and Devices) and stores the login in the Keychain. macOS may ask whether Python may access the Keychain item; choose **Always Allow** so scheduled runs work.
+   It prints an Amazon sign-in address. Open it in a browser and sign in with the Amazon account of your Kindle. Amazon then shows an amazon.com page that may look empty or broken; copy its full address from the address bar and paste it into the terminal. paperboy registers itself as a Send to Kindle app on your account (it shows up under Manage Your Content and Devices) and stores the login in the Keychain.
 
 2. Add an empty section to `config.toml`:
 

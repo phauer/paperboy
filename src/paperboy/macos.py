@@ -4,8 +4,6 @@ import logging
 import subprocess
 from typing import Protocol
 
-import keyring
-
 log = logging.getLogger(__name__)
 
 _SERVICE = "paperboy"
@@ -16,11 +14,20 @@ class SecretStore(Protocol):
     def set(self, name: str, value: str) -> None: ...
 
 
-class KeychainStore:
-    """Stores secrets in the macOS login Keychain.
+class KeychainError(Exception):
+    pass
 
-    Reads are cached per process: every Keychain read can raise an access prompt, and the pipeline asks for the
-    cookie once per post.
+
+_SECURITY = "/usr/bin/security"
+_NOT_FOUND = 44
+
+
+class KeychainStore:
+    """Stores secrets in the macOS login Keychain through the `security` tool.
+
+    The items trust only `/usr/bin/security`, a binary whose path never changes. Reading them through Python's
+    Keychain API would trust the interpreter instead, and every Homebrew upgrade of it raises a new password prompt.
+    Reads are cached per process, because the pipeline asks for the cookie once per post.
     """
 
     def __init__(self) -> None:
@@ -28,12 +35,27 @@ class KeychainStore:
 
     def get(self, name: str) -> str | None:
         if name not in self._cache:
-            self._cache[name] = keyring.get_password(_SERVICE, name)
+            result = self._security("find-generic-password", "-s", _SERVICE, "-a", name, "-w")
+            if result.returncode == _NOT_FOUND:
+                self._cache[name] = None
+            elif result.returncode != 0:
+                raise KeychainError(f"Can't read '{name}' from the Keychain: {result.stderr.strip()}")
+            else:
+                self._cache[name] = result.stdout.rstrip("\n")
         return self._cache[name]
 
     def set(self, name: str, value: str) -> None:
-        keyring.set_password(_SERVICE, name, value)
+        # Delete first: an existing item keeps the access list of whoever created it.
+        self._security("delete-generic-password", "-s", _SERVICE, "-a", name)
+        # The value travels as an argument and is briefly visible in `ps` to this user's processes.
+        result = self._security("add-generic-password", "-s", _SERVICE, "-a", name, "-w", value, "-T", _SECURITY)
+        if result.returncode != 0:
+            raise KeychainError(f"Can't store '{name}' in the Keychain: {result.stderr.strip()}")
         self._cache[name] = value
+
+    @staticmethod
+    def _security(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run([_SECURITY, *args], capture_output=True, text=True, timeout=30)
 
 
 class Notifier(Protocol):
